@@ -100,3 +100,6 @@
 .olens .ol-mobilebar { display: none; align-items: center; justify-content: space-between; gap: 8px; padding: 6px 10px; border-bottom: 1px solid var(--ol-border); background: var(--ol-surface); }
 .olens .ol-mobilebar .ol-enable .ol-switch-label { display: inline; }
 .olens .ol-mobilebar .ol-modebtn-label { display: inline; }
+
+.olens .ol-history-setting { padding: 10px 14px; margin-bottom: 6px; border-radius: var(--ol-radius-lg); background: var(--ol-surface); border: 1px solid var(--ol-border); }
+.olens .ol-history-setting .ol-switch-label { font-size: 13px; }

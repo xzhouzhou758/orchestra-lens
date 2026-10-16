@@ -312,6 +312,42 @@ function loopScript() {
     return { mode: 'loop', steps };
 }
 
+/** The search-tools agent: round-N rounds, web search / visit / lorebook upsert. */
+export function searchScript() {
+    const steps = [];
+    const at = (ms, fn) => steps.push([ms, fn]);
+    const round = (n, calls, text = '') => {
+        const rid = `round-${n}`;
+        at(60, (s, r) => s.appendRound({ runId: r.runId, round: { id: rid, label: `Round ${n}` } }));
+        at(900, (s, r) => {
+            if (text) {
+                s.ensureSection({ runId: r.runId, roundId: rid, section: { id: 'text', kind: 'text', title: 'Response' } });
+                s.appendToSection({ runId: r.runId, roundId: rid, sectionId: 'text', delta: text });
+                s.setSectionStatus({ runId: r.runId, roundId: rid, sectionId: 'text', status: 'done' });
+            }
+            s.addTokenUsage({ runId: r.runId, usage: { prompt: 2600, completion: 180 } });
+        });
+        calls.forEach(([name, args, result], i) => {
+            at(60, (s, r) => {
+                s.ensureSection({ runId: r.runId, roundId: rid, section: { id: `tool-c${i}`, kind: 'tool_call', title: `Tool: ${name}`, meta: { args } } });
+                s.setSectionStatus({ runId: r.runId, roundId: rid, sectionId: `tool-c${i}`, status: 'done' });
+            });
+            at(700, (s, r) => {
+                s.ensureSection({ runId: r.runId, roundId: rid, section: { id: `tool-result-c${i}`, kind: 'tool_result', title: `Tool result: ${name}`, meta: { ok: true } } });
+                s.appendToSection({ runId: r.runId, roundId: rid, sectionId: `tool-result-c${i}`, delta: JSON.stringify(result, null, 2) });
+                s.setSectionStatus({ runId: r.runId, roundId: rid, sectionId: `tool-result-c${i}`, status: 'done' });
+            });
+        });
+        at(40, (s, r) => s.setRoundStatus({ runId: r.runId, roundId: rid, status: 'done' }));
+    };
+    round(1, [['luker_search_agent_search', { query: '灯塔 灯油 历史 煤油' }, { ok: true, results: 5 }]]);
+    round(2, [['luker_search_agent_visit', { url: 'https://en.wikipedia.org/wiki/Lighthouse' }, { ok: true, chars: 4000 }]]);
+    round(3, [['luker_search_agent_upsert_lorebook_entry', { title: '灯塔用油', content: '```yaml\n燃料: 煤油\n```' }, { ok: true, changed: true }]]);
+    round(4, [], '已把灯塔用油的资料写进世界书，够用了。');
+    at(40, (s, r) => s.finishRun({ runId: r.runId, status: 'committed' }));
+    return { mode: 'search', steps };
+}
+
 export function scriptFor(mode, options = {}) {
     if (mode === 'director') return directorScript();
     if (mode === 'agenda') return agendaScript();

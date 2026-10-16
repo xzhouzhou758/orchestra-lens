@@ -205,9 +205,9 @@ export function createLukerSource() {
         },
 
         /** Captured when a run starts, so history entries know their chat. */
-        runContext() {
+        runContext(from = 'orchestrator') {
             const ctx = getContext();
-            return { chatId: String(ctx.chatId || ''), chatLabel: chatLabelOf(ctx), floor: lastUserFloor(ctx), presetName: lastPresetName };
+            return { chatId: String(ctx.chatId || ''), chatLabel: chatLabelOf(ctx), floor: lastUserFloor(ctx), presetName: from === 'orchestrator' ? lastPresetName : '' };
         },
 
         subscribe(onChange) {

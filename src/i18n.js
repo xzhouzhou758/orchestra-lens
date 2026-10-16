@@ -59,6 +59,7 @@ const MODES = {
     agenda: { label: '调度', hint: '调度员按情况动态派活' },
     loop: { label: '循环', hint: '一位助手反复查资料直到够用' },
     director: { label: '导演', hint: '主笔带领团队直接写出回复' },
+    search: { label: '联网搜索', hint: '回复前先上网查资料' },
 };
 
 // Shipped default agents (spec presets, agenda agents, director sub-agents).
@@ -75,6 +76,7 @@ const AGENTS = {
     single_agent: { name: '单助手', role: '一次完成场景理解、规划和风险提示' },
     agenda_planner: { name: '调度员', role: '维护待办、派助手干活、判断何时收尾' },
     loop_agent: { name: '研究员', role: '自己查聊天、世界书、记忆，够了就写指引' },
+    search_agent: { name: '搜索助手', role: '回复前先上网查资料，把有用的写进世界书' },
     main: { name: '主笔', role: '统筹全局、起草正文、按反馈修改并定稿' },
     intent_scout: { name: '意图侦察', role: '找出用户这一轮想要什么，以及世界书里的写作要求' },
     chat_scout: { name: '聊天侦察', role: '翻最近的聊天，找未了的情绪线和待回收的铺垫' },
@@ -129,7 +131,7 @@ export function t(key, ...args) {
 
 export const statusLabel = (status) => STATUS[status] || STATUS.done;
 export const modeInfo = (mode) => MODES[mode] || MODES.spec;
-export const MODE_IDS = Object.keys(MODES);
+export const MODE_IDS = Object.keys(MODES).filter(id => id !== 'search');
 
 /** Display name for an agent id. Unknown ids are user-defined names: keep them. */
 export function agentName(id) {

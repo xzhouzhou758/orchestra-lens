@@ -8,6 +8,7 @@
 //   agenda    round `node-agenda_planner-<r>` | `node-<agent>-<todo>-<r>` | `node-<final>-final`
 //   loop      round `agent-<r>`
 //   director  round `main-<r>` | `sub-<agent>-<dispatch>`
+//   search    round `round-<r>` (the search-tools agent, its own store)
 // Pure: no DOM.
 
 const str = (value) => (value == null ? '' : String(value));
@@ -46,6 +47,10 @@ export function parseRound(mode, roundId, knownIds = []) {
         m = /^agent-(\d+)$/.exec(id);
         return { agentId: 'loop_agent', attempt: m ? Number(m[1]) : 1 };
     }
+    if (mode === 'search') {
+        m = /^round-(\d+)$/.exec(id);
+        return { agentId: 'search_agent', attempt: m ? Number(m[1]) : 1 };
+    }
     if (mode === 'director') {
         if ((m = /^main-(\d+)$/.exec(id))) return { agentId: 'main', attempt: Number(m[1]) + 1 };
         if ((m = /^sub-(.+)-(\d+)$/.exec(id))) return { agentId: m[1], attempt: Number(m[2]) };
@@ -64,7 +69,7 @@ function sectionTimes(run, roundId, sectionId) {
  */
 export function buildRunView(run, knownIds = []) {
     if (!run) return null;
-    const mode = str(run.mode);
+    const mode = run.source === 'search' ? 'search' : str(run.mode);
     const start = Number(run.startedAt) || 0;
     const end = Number(run.endedAt) || Number(run.now) || start;
     const segments = [];
@@ -128,6 +133,7 @@ export function buildRunView(run, knownIds = []) {
     return {
         runId: str(run.runId),
         mode,
+        source: str(run.source || 'orchestrator'),
         status: displayStatus(run.status, run.error),
         quiet: Boolean(run.quiet),
         error: str(run.error),

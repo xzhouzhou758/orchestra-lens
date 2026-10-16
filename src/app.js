@@ -31,7 +31,7 @@ function detectTheme() {
  *   recorder: a long-lived recorder (index.js keeps one so runs are captured
  *   even while the lens is closed). Created here when absent.
  */
-export function mountOrchestraLens({ source, container = document.body, onClose = null, recorder = null, embedded = false }) {
+export function mountOrchestraLens({ source, container = document.body, onClose = null, recorder = null, takeover = null, embedded = false }) {
     const prefs = loadPrefs();
     const compactMql = globalThis.matchMedia?.(COMPACT_QUERY);
     const store = createStore({
@@ -47,13 +47,19 @@ export function mountOrchestraLens({ source, container = document.body, onClose 
         pinnedRunId: '', // history run being viewed; '' = live
         modeMenu: false,
     });
-    const rec = recorder || createRecorder({ getRunContext: () => source.runContext?.() || {} });
+    const rec = recorder || createRecorder({ getRunContext: (from) => source.runContext?.(from) || {} });
+    const runKey = (raw) => `${raw.source || 'orchestrator'}:${raw.runId}`;
+    const runViewOf = (raw) => {
+        const view = buildRunView(raw, Object.keys(flow?.agents || {}));
+        if (raw.source === 'search') view.mode = 'search';
+        return view;
+    };
     const ownsRecorder = !recorder;
     let snapshot = null;
     let flow = null;
     let destroyed = false;
 
-    const root = h('div', { class: 'olens', role: embedded ? 'region' : 'dialog', 'aria-modal': embedded ? null : 'true', 'aria-label': t('appName'), tabIndex: -1 });
+    const root = h('div', { class: 'olens ol-lens', role: embedded ? 'region' : 'dialog', 'aria-modal': embedded ? null : 'true', 'aria-label': t('appName'), tabIndex: -1 });
     root.dataset.theme = store.get().theme;
     if (embedded) root.classList.add('is-embedded');
 
@@ -65,12 +71,17 @@ export function mountOrchestraLens({ source, container = document.body, onClose 
         flow: () => flow,
         isCompact: () => store.get().compact,
         recorder: rec,
+        runKey,
+        takeover,
         /** The run shown in the run view: pinned history entry, else the live / latest one. */
         run() {
             const { pinnedRunId } = store.get();
-            const raw = pinnedRunId ? rec.history().find(item => item.runId === pinnedRunId) : rec.current();
+            // The lens is about orchestration: prefer the orchestrator's latest run.
+            const raw = pinnedRunId
+                ? rec.history().find(item => runKey(item) === pinnedRunId || item.runId === pinnedRunId)
+                : (rec.currents().find(item => item.source === 'orchestrator' && !item.quiet) || rec.current());
             const live = raw && (!snapshot?.chatId || !raw.chatId || raw.chatId === snapshot.chatId || pinnedRunId) ? raw : null;
-            return live ? buildRunView(live, Object.keys(flow?.agents || {})) : null;
+            return live ? runViewOf(live) : null;
         },
         selectAgent(id) {
             const patch = { selectedAgent: String(id || '') };
@@ -295,7 +306,7 @@ export function mountOrchestraLens({ source, container = document.body, onClose 
             if (chatChanged) Object.assign(patch, { pinnedRunId: '', selectedSegment: '' });
             if (store.get().selectedAgent && !flow.agents[store.get().selectedAgent] && !app.run()?.lanes.some(l => l.agentId === store.get().selectedAgent)) patch.selectedAgent = '';
             store.set(patch);
-            if (source.runStore) rec.attach(await source.runStore());
+            if (source.runStore) rec.attach(await source.runStore(), 'orchestrator');
             renderAll();
         } catch (err) {
             if (token !== loadToken || destroyed) return;

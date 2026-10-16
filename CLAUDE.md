@@ -1,6 +1,6 @@
 # CLAUDE.md — Orchestra Lens（编排透镜）
 
-Luker 第三方扩展：给内置 `orchestrator`（多智能体编排）做的可视化工作台。姊妹项目 memory-lens（`../memory-lens`），设计语言、工具函数、约定都沿用它。当前版本 0.1.0。仓库 https://github.com/xzhouzhou758/orchestra-lens ，用户在 Luker「扩展 → 安装扩展」粘贴该地址安装；改 manifest.json 和 package.json 的 version 后 Luker 会提示更新。
+Luker 第三方扩展：给内置 `orchestrator`（多智能体编排）做的可视化工作台。姊妹项目 memory-lens（`../memory-lens`），设计语言、工具函数、约定都沿用它。当前版本 0.2.0。仓库 https://github.com/xzhouzhou758/orchestra-lens ，用户在 Luker「扩展 → 安装扩展」粘贴该地址安装；改 manifest.json 和 package.json 的 version 后 Luker 会提示更新。
 
 ## 用户的硬性要求（沿用 memory-lens）
 
@@ -12,10 +12,11 @@ Luker 第三方扩展：给内置 `orchestrator`（多智能体编排）做的�
 ## 命令
 
 ```bash
-npm test             # node:test，无依赖（18 个用例）
+npm test             # node:test，无依赖（26 个用例）
 npm run preview      # http://127.0.0.1:4174/preview/index.html
 # 预览参数：mode=spec|single|agenda|loop|director  run=live|done|partial|rerun|none  at=0.55（partial 停在哪）
 #           view=flow|run|history  theme=dark|light  select=<agentId>  seg=<n>  off=1  data=error  speed=1
+# 运行面板预览：/preview/dock.html?stage=search|orch|done|live  mode=…  at=0.5  theme=…  expand=<n>
 ```
 
 改完：`npm test` + `node --check`；界面用无头 Chrome 截 1440×900 和 390×844（注意 headless `--window-size` 的视口比截图宽，手机布局以浏览器面板 375 宽为准）。
@@ -23,12 +24,14 @@ npm run preview      # http://127.0.0.1:4174/preview/index.html
 ## 架构
 
 ```
-index.js              入口：魔法棒菜单 #orchestra_lens_wand_item；启动后 1.5 秒就挂上录制器（关着界面也记录）
+index.js              入口：魔法棒菜单「编排透镜」+「运行面板」；一加载就启动录制器 + 接管原生运行面板（关着透镜也记录）
 src/app.js            外壳：状态、加载、实时刷新、布局、快捷键、手机底部抽屉
 src/source-luker.js   读设置/角色卡方案、导入 run-state/store.js、开关/切模式、打开原生面板
 src/model/profile.js  纯函数：五种模式的 profile → 统一的 flow { columns, agents, limits }
 src/model/run.js      纯函数：录到的 run → 每位助手的时间段（lanes/segments）、并发峰值
-src/model/recorder.js 订阅运行面板 store，给每个 section 打时间戳，结束后存 localStorage 'orchestraLens.history.v1'（最多 30 条，正文截断 24k）
+src/model/describe.js 纯函数：工具调用 / 输出 → 一句中文描述（运行面板每位助手下面那几行）
+src/dock/             运行面板：dock.js（UI）、dock-model.js（纯函数：按步骤/轮次分组）、takeover.js（找到所有 store、隐藏原生面板）
+src/model/recorder.js 可同时订阅多个运行面板 store（attach(store, 'orchestrator'|'search')），给每个 section 打时间戳，结束后存 localStorage 'orchestraLens.history.v1'（最多 30 条，正文截断 24k）
 src/views/            flow-view（卡片 + SVG 连线）、run-view（泳道时间线 + 详情）、history-view、sections（渲染思考/输出/工具/调度决定）
 src/panels/           inspector、dialog
 preview/              mock-store.js（同名方法的假 store）、mock-data.js（五种模式的方案 + 按真实 id 规则写的回放脚本，雾港故事）
@@ -50,7 +53,16 @@ preview/              mock-store.js（同名方法的假 store）、mock-data.js
 - `quiet: true` 是工作台模拟运行，不进历史、不点亮流程图。
 - director 不发 `luker.orchestrator.result`、不存楼层快照；其他模式的楼层快照（只有最终结果）通过 `snapshot-cache.js` `getLoadedAnchorMap` 读，显示在历史页「更早的结果」。
 
+## 运行面板（接管原生面板）
+
+- Luker 有两个原生运行面板：编排器（`#luker-orch-run-panel`）和联网搜索（`#luker-search-tools-run-panel`），都用 `/scripts/run-panel/` 的共用代码，运行开始时自动从右侧滑出。
+- 搜索的 store 是私有的（`search-tools/main.js` 里的 `searchRunPanel`，没导出）。`takeover.js` 包了一层 `PanelRenderer.prototype.handle`：每个原生面板收到事件时会把 `this.store` 交给我们（`this.root.id` 区分来源）。**不改 Luker 代码**，原来的 handle 照常执行。
+- 接管时给 `<html>` 加 `ol-takeover`，CSS 隐藏 `.luker-run-panel` 和它的胶囊。原生面板被 Luker 的「显示运行面板」按钮打开时，MutationObserver 看到 `data-state=open` → 打开我们的面板（运行开始 800ms 内的自动打开忽略）。
+- 开关：localStorage `orchestraLens.takeover`（'off' = 用原生面板），面板底部「用原生面板」和透镜历史页都能改，刷新后生效。自动打开偏好在 `orchestraLens.dock.v1`。
+- **定位的坑**：手机上 Luker 给 `<html>` 加了 transform 且高度为 0，`position:fixed; bottom:0` 会跑到屏幕顶上。面板、遮罩、胶囊都用 `viewport.js` 按 visualViewport 量出来写 px（`fitToViewport(root, { layout })`）。电脑上宽度 = 聊天栏右侧空白（`--sheldWidth`），夹在 320–420px。
+- 搜索 round id 是 `round-<n>`，在 run.js 里映射成一位「搜索助手」（`search_agent`）。
+
 ## 已验证 / 未验证
 
-- 已在真实 Luker 2.8.0（临时数据目录）中验证：菜单项、读默认 spec 方案、开关与切模式同步原生面板、用真实 store 驱动时实时显示与历史记录。
+- 已在真实 Luker 2.8.0（临时数据目录）中验证：菜单项、读默认 spec 方案、开关与切模式同步原生面板、用真实 store 驱动时实时显示与历史记录；运行面板接管（编排 store + 用 search-tools 自己的 createSearchRunPanel 建的面板）、原生面板隐藏、「显示运行面板」按钮跳到我们的面板、手机底部抽屉/胶囊定位、改回原生面板后完全恢复。
 - 未验证：真实模型跑完整一轮、角色卡方案、agenda chatOverrides、Safari/iOS 真机。

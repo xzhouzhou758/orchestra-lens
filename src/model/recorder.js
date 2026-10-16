@@ -1,28 +1,29 @@
 // SPDX-License-Identifier: AGPL-3.0-or-later
 //
-// Listens to the orchestrator's run store and keeps:
-//   - a live copy of the current run, plus per-section start/end stamps
-//     (the store only times rounds; spec nodes share one round per stage)
+// Listens to one or more run-panel stores (the orchestrator's, and the
+// search agent's) and keeps:
+//   - a live copy of each store's current run, plus per-section start/end
+//     stamps (the stores only time rounds; spec nodes share one round)
 //   - a small history of finished runs, persisted to localStorage
 //
-// The store's events carry ids only; we read the data via getCurrentRun().
-// No DOM. `storage` is injectable so Node tests can pass a Map-backed shim.
+// Store events carry ids only; data is read via getCurrentRun(). No DOM.
+// `storage` is injectable so Node tests can pass a Map-backed shim.
 
 const HISTORY_KEY = 'orchestraLens.history.v1';
 const MAX_RUNS = 30;
 const MAX_BODY = 24000;
 const TERMINAL = new Set(['done', 'failed']);
 
+function safeJson(value) {
+    if (value == null) return null;
+    try { return JSON.parse(JSON.stringify(value)); } catch { return null; }
+}
+
 function cloneRun(run, { truncate = false } = {}) {
     if (!run) return null;
     const cut = (text) => {
         const value = String(text ?? '');
         return truncate && value.length > MAX_BODY ? `${value.slice(0, MAX_BODY)}\n…（内容过长，已截断）` : value;
-    };
-    let meta;
-    const safeMeta = (value) => {
-        if (value == null) return null;
-        try { return JSON.parse(JSON.stringify(value)); } catch { return null; }
     };
     return {
         runId: run.runId,
@@ -41,13 +42,13 @@ function cloneRun(run, { truncate = false } = {}) {
             status: round.status,
             startedAt: round.startedAt,
             endedAt: round.endedAt,
-            sections: (round.sections || []).map(section => (meta = safeMeta(section.meta), {
+            sections: (round.sections || []).map(section => ({
                 id: section.id,
                 kind: section.kind,
                 title: section.title,
                 status: section.status,
                 body: cut(section.body),
-                meta,
+                meta: safeJson(section.meta),
             })),
         })),
     };
@@ -59,15 +60,17 @@ export function createMemoryStorage() {
 }
 
 /**
- * @param {{ storage?: Storage, now?: () => number, wallNow?: () => number, getRunContext?: () => object }} options
+ * @param {{ storage?: Storage, now?: () => number, wallNow?: () => number, getRunContext?: (source: string) => object }} options
  *   getRunContext: called once when a run starts; returns { chatId, floor, chatLabel, presetName }.
  */
 export function createRecorder({ storage = globalThis.localStorage, now = () => globalThis.performance?.now?.() ?? Date.now(), wallNow = () => Date.now(), getRunContext = () => ({}) } = {}) {
-    let store = null;
-    let unsubscribe = null;
-    let current = null; // { run (live ref), times, context, startedAtWall }
+    // store → { source, unsubscribe, current }
+    // current = { run (live ref), times, context, startedAtWall, finished, source, seq }
+    const attached = new Map();
     const listeners = new Set();
     let history = loadHistory();
+    let latest = null; // the most recently started `current` across stores
+    let seq = 0;
     let notifyQueued = false;
 
     function loadHistory() {
@@ -89,9 +92,9 @@ export function createRecorder({ storage = globalThis.localStorage, now = () => 
         }
     }
 
-    function emit(kind) {
+    function emit(kind, source) {
         for (const fn of [...listeners]) {
-            try { fn(kind); } catch (err) { console.error('[orchestra-lens] listener failed', err); }
+            try { fn(kind, source); } catch (err) { console.error('[orchestra-lens] listener failed', err); }
         }
     }
 
@@ -104,49 +107,75 @@ export function createRecorder({ storage = globalThis.localStorage, now = () => 
         else queueMicrotask(flush);
     }
 
-    function stamp(key, field) {
-        if (!current) return;
-        const entry = current.times[key] || (current.times[key] = {});
-        if (field === 'start' && entry.start != null) return;
-        entry[field] = now();
+    function contextFor(source) {
+        try { return getRunContext(source) || {}; } catch { return {}; }
     }
 
-    function finalize() {
-        if (!current) return;
-        const snap = snapshotCurrent({ truncate: true });
+    function begin(entry, run, startedAtWall) {
+        entry.current = { run, times: {}, context: contextFor(entry.source), startedAtWall, finished: run?.status !== 'running', source: entry.source, seq: ++seq };
+        latest = entry.current;
+    }
+
+    function snapshot(current, { truncate = false } = {}) {
+        if (!current) return null;
+        if (!current.run) return current.lastSnap || null;
+        const snap = cloneRun(current.run, { truncate });
+        snap.times = JSON.parse(JSON.stringify(current.times));
+        snap.startedAtWall = current.startedAtWall;
+        snap.now = now();
+        snap.source = current.source;
+        snap.chatId = String(current.context.chatId || '');
+        snap.chatLabel = String(current.context.chatLabel || '');
+        snap.floor = Number(current.context.floor) || 0;
+        snap.presetName = String(current.context.presetName || '');
+        current.lastSnap = snap;
+        return snap;
+    }
+
+    function finalize(current) {
+        if (!current || current.finished) return;
+        const snap = snapshot(current, { truncate: true });
         current.finished = true;
         if (!snap || snap.quiet) return;
-        history = [snap, ...history.filter(item => item.runId !== snap.runId)].slice(0, MAX_RUNS);
+        history = [snap, ...history.filter(item => item.runId !== snap.runId || item.source !== snap.source)].slice(0, MAX_RUNS);
         saveHistory();
     }
 
-    function onEvent(event) {
-        const run = store?.getCurrentRun?.() || null;
+    function onEvent(entry, event) {
+        const run = entry.store.getCurrentRun?.() || null;
+        const current = entry.current;
+        const stamp = (field) => {
+            if (!current) return;
+            const key = `${event.roundId}/${event.sectionId}`;
+            const times = current.times[key] || (current.times[key] = {});
+            if (field === 'start' && times.start != null) return;
+            times[field] = now();
+        };
         switch (event?.type) {
-            case 'run_started': {
-                let context = {};
-                try { context = getRunContext() || {}; } catch { context = {}; }
-                current = { run, times: {}, context, startedAtWall: wallNow(), finished: false };
-                emit('start');
+            case 'run_started':
+                begin(entry, run, wallNow());
+                emit('start', entry.source);
                 return;
-            }
             case 'section_ensured':
-                stamp(`${event.roundId}/${event.sectionId}`, 'start');
+                stamp('start');
                 break;
             case 'section_status':
-                if (TERMINAL.has(event.status)) stamp(`${event.roundId}/${event.sectionId}`, 'end');
+                if (TERMINAL.has(event.status)) stamp('end');
                 break;
             case 'run_finished':
                 // Director can report twice (stop + cleanup); keep the first.
                 if (current && run && current.run === run && !current.finished) {
-                    finalize();
-                    emit('finish');
+                    finalize(current);
+                    emit('finish', entry.source);
                 }
                 return;
             case 'run_cleared':
-                if (current && !current.finished) finalize();
-                current = current ? { ...current, run: null, cleared: true } : null;
-                emit('clear');
+                if (current) {
+                    finalize(current);
+                    current.run = null;
+                    current.cleared = true;
+                }
+                emit('clear', entry.source);
                 return;
             default:
                 break;
@@ -155,48 +184,32 @@ export function createRecorder({ storage = globalThis.localStorage, now = () => 
         emitSoon();
     }
 
-    function snapshotCurrent({ truncate = false } = {}) {
-        if (!current?.run) return current?.lastSnap || null;
-        const snap = cloneRun(current.run, { truncate });
-        snap.times = JSON.parse(JSON.stringify(current.times));
-        snap.startedAtWall = current.startedAtWall;
-        snap.now = now();
-        Object.assign(snap, {
-            chatId: String(current.context.chatId || ''),
-            chatLabel: String(current.context.chatLabel || ''),
-            floor: Number(current.context.floor) || 0,
-            presetName: String(current.context.presetName || ''),
-        });
-        current.lastSnap = snap;
-        return snap;
-    }
+    const running = () => [...attached.values()].map(entry => entry.current).filter(c => c?.run?.status === 'running');
 
     return {
-        attach(nextStore) {
-            if (store === nextStore) return;
-            unsubscribe?.();
-            store = nextStore;
-            unsubscribe = store?.subscribe?.(onEvent) || null;
-            // A run may already be in flight when the lens opens.
-            const run = store?.getCurrentRun?.();
-            if (run && !current) {
-                let context = {};
-                try { context = getRunContext() || {}; } catch { context = {}; }
-                current = { run, times: {}, context, startedAtWall: wallNow() - Math.max(0, now() - (run.startedAt || now())), finished: run.status !== 'running' };
-            }
+        /** Idempotent per store. `source` names where runs come from ('orchestrator' | 'search'). */
+        attach(store, source = 'orchestrator') {
+            if (!store?.subscribe || attached.has(store)) return;
+            const entry = { store, source, current: null, unsubscribe: null };
+            attached.set(store, entry);
+            entry.unsubscribe = store.subscribe(event => onEvent(entry, event));
+            // A run may already be in flight when we attach.
+            const run = store.getCurrentRun?.();
+            if (run) begin(entry, run, wallNow() - Math.max(0, now() - (run.startedAt || now())));
         },
         detach() {
-            unsubscribe?.();
-            unsubscribe = null;
-            store = null;
+            for (const entry of attached.values()) entry.unsubscribe?.();
+            attached.clear();
         },
-        /** Live run (fresh snapshot each call) or the last one seen this session. */
-        current: () => snapshotCurrent(),
-        isRunning: () => current?.run?.status === 'running',
+        hasSource: (source) => [...attached.values()].some(entry => entry.source === source),
+        /** Live run (fresh snapshot each call) or the last one seen, across all stores. */
+        current: () => snapshot(latest),
+        /** Live / last run of every store, newest first. */
+        currents: () => [...attached.values()].map(entry => entry.current).filter(Boolean).sort((a, b) => b.seq - a.seq).map(c => snapshot(c)).filter(Boolean),
+        isRunning: () => running().length > 0,
         stop() {
-            const run = current?.run;
-            if (run?.status !== 'running') return false;
-            const fn = run.stopFn || run.abortFn;
+            const live = running().sort((a, b) => b.seq - a.seq)[0];
+            const fn = live?.run?.stopFn || live?.run?.abortFn;
             if (typeof fn !== 'function') return false;
             fn();
             return true;
@@ -211,7 +224,5 @@ export function createRecorder({ storage = globalThis.localStorage, now = () => 
             listeners.add(fn);
             return () => listeners.delete(fn);
         },
-        /** test hook */
-        _onEvent: onEvent,
     };
 }

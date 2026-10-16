@@ -1,5 +1,18 @@
-/* Shell: full-viewport workspace, topbar, three-column body. */
+/* Shell: full-viewport workspace, topbar, three-column body.
+ * `.olens` = shared base (also used by the side dock); `.ol-lens` = full screen. */
 .olens {
+    color: var(--ol-text);
+    font-family: var(--ol-font);
+    font-size: 13px;
+    line-height: 1.5;
+    letter-spacing: 0;
+    -webkit-font-smoothing: antialiased;
+    text-rendering: optimizeLegibility;
+    outline: none;
+    isolation: isolate;
+    box-sizing: border-box;
+}
+.olens.ol-lens {
     position: fixed;
     inset: 0;
     /* Above Luker's UI and floating helper scripts; size is refined in px by viewport.js. */
@@ -9,16 +22,7 @@
     display: flex;
     flex-direction: column;
     background: var(--ol-bg);
-    color: var(--ol-text);
-    font-family: var(--ol-font);
-    font-size: 13px;
-    line-height: 1.5;
-    letter-spacing: 0;
-    -webkit-font-smoothing: antialiased;
-    text-rendering: optimizeLegibility;
-    outline: none;
     animation: ol-enter 220ms var(--ol-ease);
-    isolation: isolate;
 }
 .olens.is-embedded { position: relative; inset: auto; z-index: auto; width: auto; height: 100%; animation: none; }
 

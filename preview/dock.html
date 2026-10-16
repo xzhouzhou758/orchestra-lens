@@ -1,0 +1,77 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+    <meta charset="utf-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+    <title>Orchestra Lens · Dock preview</title>
+    <link rel="stylesheet" href="../style.css">
+    <style>
+        /* Stand-in for a Luker chat page */
+        html, body { margin: 0; height: 100%; background: #1b1d22; font: 14px system-ui, "PingFang SC", sans-serif; color: #ddd; }
+        .fake-chat { max-width: 720px; margin: 0 auto; padding: 24px 16px 120px; display: grid; gap: 14px; }
+        .fake-msg { padding: 12px 14px; border-radius: 10px; background: #26292f; line-height: 1.7; }
+        .fake-msg b { display: block; margin-bottom: 4px; color: #f0c674; }
+        .fake-bar { position: fixed; left: 0; right: 0; bottom: 0; padding: 12px; background: #15171b; display: flex; gap: 8px; justify-content: center; }
+        .fake-bar button { padding: 8px 14px; border-radius: 8px; border: 1px solid #444; background: #2a2d33; color: #ddd; cursor: pointer; }
+    </style>
+</head>
+<body>
+    <div class="fake-chat">
+        <div class="fake-msg"><b>林栖</b>雾从码头那边漫上来了。灯塔的灯油只够今晚。</div>
+        <div class="fake-msg"><b>你</b>黑礁那艘沉船，你知道多少？</div>
+    </div>
+    <div class="fake-bar"><button id="go">发送（搜索 → 编排）</button><button id="toggle">运行面板</button></div>
+    <script type="module">
+        // Preview params: mode=spec|agenda|loop|director  at=0.5 (freeze orchestration at that point)
+        //   theme=dark|light  stage=search|orch|done  expand=<n> (expand n-th agent row)
+        import { createRecorder, createMemoryStorage } from '../src/model/recorder.js';
+        import { createDock } from '../src/dock/dock.js';
+        import { buildFlow } from '../src/model/profile.js';
+        import { createMockRunStore } from './mock-store.js';
+        import { PROFILES, scriptFor, searchScript, playScript, createClock } from './mock-data.js';
+
+        const params = new URLSearchParams(location.search);
+        const mode = params.get('mode') || 'spec';
+        const stage = params.get('stage') || 'live';
+        if (params.get('theme')) localStorage.setItem('orchestraLens.prefs.v1', JSON.stringify({ theme: params.get('theme') }));
+        localStorage.removeItem('orchestraLens.dock.v1');
+
+        const instant = stage !== 'live';
+        const clock = createClock(performance.now());
+        const now = instant ? clock.now : () => performance.now();
+        const orchStore = createMockRunStore({ now });
+        const searchStore = createMockRunStore({ now });
+        const recorder = createRecorder({ storage: createMemoryStorage(), now, getRunContext: () => ({ chatId: 'demo', chatLabel: '林栖', floor: 14 }) });
+        recorder.attach(orchStore, 'orchestrator');
+        recorder.attach(searchStore, 'search');
+        const flow = buildFlow(PROFILES[mode], { mode, settings: { reviewRerunMaxRounds: 2 } });
+        const dock = createDock({ recorder, getFlow: () => flow, openLens: () => alert('（打开编排透镜）') });
+        window.__dock = dock;
+
+        async function send({ speed = 1, until = '' } = {}) {
+            const search = searchScript();
+            const orch = scriptFor(mode);
+            if (instant) {
+                playScript(searchStore, search, { speed: Infinity, clock, stopAt: until === 'search' ? Math.floor(search.steps.length * 0.6) : Infinity });
+                if (until === 'search') return;
+                const at = Number(params.get('at') || (until === 'done' ? 1 : 0.5));
+                playScript(orchStore, orch, { speed: Infinity, clock, stopAt: at >= 1 ? Infinity : Math.floor(orch.steps.length * at) });
+                return;
+            }
+            const sp = playScript(searchStore, search, { speed });
+            await new Promise(r => { const off = recorder.subscribe(k => { if (k === 'finish') { off(); r(); } }); });
+            void sp;
+            playScript(orchStore, orch, { speed });
+        }
+        document.getElementById('go').onclick = () => send({ speed: Number(params.get('speed') || 1) });
+        document.getElementById('toggle').onclick = () => dock.toggle();
+
+        if (stage === 'search') send({ until: 'search' });
+        else if (stage === 'orch') send({ until: 'orch' });
+        else if (stage === 'done') send({ until: 'done' });
+
+        const expand = params.get('expand');
+        if (expand != null) setTimeout(() => document.querySelectorAll('.ol-dock-agent-head:not(:disabled)')[Number(expand)]?.click(), 200);
+    </script>
+</body>
+</html>
