@@ -56,6 +56,7 @@ export function createRunView(app) {
                 run.floor >= 0 && run.floor !== 0 ? stat('楼层', `#${run.floor}`) : null,
                 started ? stat('开始', started) : null,
                 h('span', { class: 'ol-spacer' }),
+                !running && app.source?.ai ? button('AI 诊断', () => app.diagnose(run.key), { iconName: 'target', className: 'ol-btn-sm', title: '让 AI 找出这次运行哪里出了问题' }) : null,
                 running && !pinned ? button(t('runStop'), () => { if (!app.recorder.stop()) app.notify('无法停止', { error: true }); }, { iconName: 'stop', className: 'ol-btn-sm ol-btn-danger' }) : null),
             run.error && run.status !== 'committed' ? h('div', { class: 'ol-run-error' }, icon('alert', { size: 14 }), h('span', { text: humanError(run.error) })) : null);
     }
@@ -135,6 +136,7 @@ export function createRunView(app) {
                     h('h3', { text: agentName(seg.agentId) }),
                     h('span', { class: 'ol-detail-sub', text: [segmentLabel(seg), formatDuration(seg.duration), statusLabel(seg.status)].filter(Boolean).join(' · ') })),
                 h('span', { class: 'ol-spacer' }),
+                app.source?.ai && run.status !== 'running' ? button('诊断这一步', () => app.diagnose(run.key, index + 1), { iconName: 'target', className: 'ol-btn-sm ol-btn-ghost' }) : null,
                 iconButton('chevronLeft', '上一段', () => prev && app.selectSegment(prev.key, prev.agentId), { disabled: !prev }),
                 iconButton('chevronRight', '下一段', () => next && app.selectSegment(next.key, next.agentId), { disabled: !next }),
                 iconButton('x', t('close'), () => app.selectSegment(''))),

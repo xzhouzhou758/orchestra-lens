@@ -7,9 +7,11 @@ import { h, clear, put, copyText } from '../util.js';
 import { icon } from '../icons.js';
 import { t, agentName, agentRole, toolName, modeInfo, statusLabel } from '../i18n.js';
 import { formatDuration } from '../model/run.js';
-import { iconButton, emptyState } from '../ui/components.js';
+import { iconButton, emptyState, button } from '../ui/components.js';
 import { agentAvatar, toneOf } from '../views/flow-view.js';
 import { renderSections } from '../views/sections.js';
+import { textField, routingField } from './field-editor.js';
+import { FIELD_LABELS } from '../model/edit.js';
 
 const PROMPT_PREVIEW = 420;
 
@@ -27,6 +29,40 @@ export function createInspector(app) {
                     iconButton('copy', t('copy'), async () => { if (await copyText(value)) app.notify(t('copied')); }, { className: 'ol-iconbtn-sm' }),
                     long ? iconButton('fit', '全屏查看', () => app.showText(`${agentName(app.state().selectedAgent)} · ${title}`, [{ title: '', text: value }]), { className: 'ol-iconbtn-sm' }) : null)),
             h('div', { class: `ol-prompt${long ? ' is-clamped' : ''}`, text: value }));
+    }
+
+    // Editable view of one field: draft value vs stored value.
+    function field(id, key, title) {
+        const drafts = app.drafts;
+        const fields = app.fieldsOf(id);
+        if (!fields.includes(key)) return null;
+        const value = drafts.get(id, key);
+        const original = drafts.changeFor(id, key)?.before ?? value;
+        if (!value && !app.canEdit()) return null;
+        return textField({
+            app,
+            title,
+            value,
+            original,
+            editable: app.canEdit(),
+            fullTitle: `${agentName(id)} · ${title}`,
+            onChange: (next) => drafts.set(id, key, next),
+            aiAction: app.source.ai ? () => app.openAi(`改进「${agentName(id)}」的${FIELD_LABELS[key]}：`) : null,
+        });
+    }
+
+    function routingEditable(id, agent) {
+        const fields = app.fieldsOf(id);
+        if (!fields.includes('api') && !fields.includes('preset')) return routing(agent);
+        const opts = app.modelOptions();
+        const rows = ['api', 'preset'].filter(key => fields.includes(key)).map(key => ({
+            field: key,
+            label: key === 'api' ? t('apiPreset') : t('promptPreset'),
+            value: app.drafts.get(id, key),
+            original: app.drafts.changeFor(id, key)?.before ?? app.drafts.get(id, key),
+            options: key === 'api' ? opts.connections : opts.presets,
+        }));
+        return routingField({ rows, editable: app.canEdit(), fallback: t('followGlobal'), onChange: (key, value) => app.drafts.set(id, key, value) });
     }
 
     function routing(agent) {
@@ -47,6 +83,14 @@ export function createInspector(app) {
             list.length
                 ? h('div', { class: 'ol-toolcloud' }, list.map(name => h('span', { class: 'ol-chip', title: name, text: toolName(name) })))
                 : h('p', { class: 'ol-muted', text: t('noTools') }));
+    }
+
+    function editBar(id, agent) {
+        if (!agent) return null;
+        const reason = app.canEdit() ? '' : app.editBlockedReason();
+        return h('div', { class: 'ol-insp-editbar' },
+            app.source.ai ? h('button', { type: 'button', class: 'ol-btn ol-btn-sm', onClick: () => app.openAi(`看看「${agentName(id)}」的设定有什么可以改进的`) }, icon('sparkle', { size: 13 }), h('span', { text: 'AI 改进这位助手' })) : null,
+            reason ? h('span', { class: 'ol-insp-note', text: reason }) : null);
     }
 
     function activity(agentId) {
@@ -70,6 +114,7 @@ export function createInspector(app) {
                 onClick: () => app.selectSegment(item.key, agentId),
                 text: String(i + 1),
             }))) : null,
+            app.source.ai && run.status !== 'running' ? h('div', { class: 'ol-insp-diag' }, button('AI 诊断这一步', () => app.diagnose(run.key, run.segments.indexOf(seg) + 1), { iconName: 'target', className: 'ol-btn-sm' })) : null,
             renderSections(seg.sections, { app, mode: run.mode, agentId }));
     }
 
@@ -111,12 +156,20 @@ export function createInspector(app) {
                 h('span', { class: 'ol-spacer' }),
                 iconButton('x', t('close'), () => app.selectAgent(''), { className: 'ol-iconbtn-sm' })),
             agentRole(id) || agent?.description ? h('p', { class: 'ol-insp-role', text: agentRole(id) || agent.description }) : null,
-            agentRole(id) && agent?.description ? promptBlock(t('description'), agent.description) : null,
+            editBar(id, agent),
             // The run view shows the selected step in its own detail pane.
             app.state().view === 'run' ? null : activity(id),
-            agent ? promptBlock(t('systemPrompt'), agent.systemPrompt) : null,
-            agent ? promptBlock(t('userPrompt'), agent.userPrompt) : null,
-            agent ? routing(agent) : null,
+            agent && app.draftsActive() ? [
+                field(id, 'description', t('description')),
+                field(id, 'system', t('systemPrompt')),
+                field(id, 'task', t('userPrompt')),
+                routingEditable(id, agent),
+            ] : agent ? [
+                agentRole(id) && agent.description ? promptBlock(t('description'), agent.description) : null,
+                promptBlock(t('systemPrompt'), agent.systemPrompt),
+                promptBlock(t('userPrompt'), agent.userPrompt),
+                routing(agent),
+            ] : null,
             agent ? toolsBlock(agent) : null,
             !agent ? h('p', { class: 'ol-muted', text: '这位助手不在当前方案里（可能是临时派遣，或方案已更换）。' }) : null);
     }

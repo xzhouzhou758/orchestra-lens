@@ -6,7 +6,7 @@
 // Pure — safe to import in Node.
 
 const STRINGS = {
-    appName: '编排透镜', close: '关闭', refresh: '刷新', theme: '切换主题', inspector: '详情', toggleInspector: '详情栏',
+    appName: '编排透镜', close: '关闭', cancel: '取消', refresh: '刷新', theme: '切换主题', inspector: '详情', toggleInspector: '详情栏',
     viewFlow: '流程', viewRun: '运行', viewHistory: '历史',
     enabled: '启用编排', disabledHint: '编排未启用，发消息时不会运行。', enableNow: '立即启用',
     mode: '执行模式', openNative: '在原生面板中编辑', openNativeUnavailable: '未找到多智能体编排面板（请确认已启用该扩展）',

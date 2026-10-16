@@ -48,7 +48,7 @@ function detectTheme() {
 /**
  * @param {{ recorder: object, getFlow?: () => object|null, openLens?: (runKey?: string) => void, onRestoreNative?: () => void, container?: HTMLElement }} options
  */
-export function createDock({ recorder, getFlow = () => null, openLens = null, onRestoreNative = null, container = document.body }) {
+export function createDock({ recorder, getFlow = () => null, openLens = null, onDiagnose = null, onRestoreNative = null, container = document.body }) {
     const prefs = { autoOpen: true, ...loadPrefs() };
     const compactMql = globalThis.matchMedia?.(COMPACT_QUERY);
     let state = 'closed'; // closed | open | pill
@@ -285,7 +285,9 @@ export function createDock({ recorder, getFlow = () => null, openLens = null, on
             others.length ? h('div', { class: 'ol-dock-also' }, icon('play', { size: 12 }), h('span', { text: `${others.map(r => (r.source === 'search' ? '联网搜索' : '编排')).join('、')} 也在运行` })) : null,
             view.error && view.status !== 'committed' ? h('div', { class: 'ol-run-error' }, icon('alert', { size: 13 }), h('span', { text: humanError(view.error) })) : null,
             blocks.length ? h('div', { class: 'ol-dock-blocks' }, blocks.map(blk => blockEl(blk, view))) : h('p', { class: 'ol-dock-empty', text: '正在准备…' }),
-            finalEl(view));
+            finalEl(view),
+            onDiagnose && view.status !== 'running' && view.source === 'orchestrator' ? h('div', { class: 'ol-dock-diag' },
+                h('button', { type: 'button', class: 'ol-btn ol-btn-sm', onClick: () => onDiagnose(key) }, icon('target', { size: 13 }), h('span', { text: view.status === 'committed' ? '结果不满意？AI 诊断' : 'AI 诊断哪里出了错' }))) : null);
         body.scrollTop = pinnedBottom ? body.scrollHeight : prevScroll;
 
         put(clear(foot),

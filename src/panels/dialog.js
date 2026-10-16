@@ -31,11 +31,44 @@ export function createDialog() {
         requestAnimationFrame(() => closeBtn.focus());
     }
 
+    /**
+     * Arbitrary content with action buttons. Resolves with the clicked
+     * action's value ('' when dismissed).
+     * @param {string} heading
+     * @param {Node|Node[]} content
+     * @param {{ label: string, value: string, primary?: boolean, danger?: boolean }[]} actions
+     */
+    function ask(heading, content, actions = []) {
+        returnFocus = document.activeElement;
+        title.textContent = heading;
+        panel.setAttribute('aria-label', heading);
+        clear(body);
+        put(body, content);
+        const foot = h('footer', { class: 'ol-dialog-foot' }, actions.map(action => h('button', {
+            type: 'button',
+            class: `ol-btn${action.primary ? ' ol-btn-primary' : ''}${action.danger ? ' ol-btn-danger' : ''}`,
+            onClick: () => finish(action.value),
+        }, h('span', { text: action.label }))));
+        put(body, foot);
+        el.hidden = false;
+        requestAnimationFrame(() => (foot.querySelector('.ol-btn-primary') || closeBtn).focus());
+        return new Promise((resolve) => { pending = resolve; });
+    }
+
+    let pending = null;
+    function finish(value) {
+        const resolve = pending;
+        pending = null;
+        close();
+        resolve?.(value);
+    }
+
     function close() {
+        if (pending) { finish(''); return; }
         if (el.hidden) return;
         el.hidden = true;
         if (returnFocus?.isConnected) returnFocus.focus();
     }
 
-    return { el, open, close, isOpen: () => !el.hidden };
+    return { el, open, ask, close, isOpen: () => !el.hidden };
 }

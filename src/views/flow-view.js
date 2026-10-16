@@ -68,6 +68,7 @@ export function createFlowView(app) {
         if (agent.kind === 'review') chips.push(h('span', { class: 'ol-chip is-review' }, icon('review', { size: 12 }), h('span', { text: t('flowReview') })));
         if (tools.length) chips.push(h('span', { class: 'ol-chip', title: tools.map(toolName).join('、') }, icon('tool', { size: 12 }), h('span', { text: String(tools.length) })));
         if (agent.apiPreset || agent.promptPreset) chips.push(h('span', { class: 'ol-chip', title: [agent.apiPreset, agent.promptPreset].filter(Boolean).join(' · ') }, icon('brain', { size: 12 }), h('span', { text: agent.apiPreset || agent.promptPreset })));
+        if (flow.edited?.has(id)) chips.push(h('span', { class: 'ol-chip is-edited', title: '有未保存的修改' }, icon('pen', { size: 12 }), h('span', { text: '未保存' })));
         if (act?.runs > 1) chips.push(h('span', { class: 'ol-chip is-runs', text: `×${act.runs}` }));
         const btn = h('button', {
             type: 'button',

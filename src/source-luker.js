@@ -12,6 +12,8 @@
 // URL: browsers key ES modules by URL, so this is the instance the runtimes
 // already write to. If a path ever moves, load() reports SourceError('api').
 
+import { createProfileAccess, createAiAccess } from './source-write.js';
+
 const ORCH = '/scripts/extensions/orchestrator';
 const MODES = ['spec', 'single', 'agenda', 'loop', 'director'];
 const CHAT_EVENTS = ['CHAT_CHANGED', 'CHAT_DELETED', 'GROUP_CHAT_DELETED'];
@@ -44,6 +46,7 @@ function loadModules() {
             runStore: store.default,
             getPreset: presets?.getPreset || null,
             createFactoryPresetForMode: defaults?.createFactoryPresetForMode || null,
+            listPresets: presets?.listPresets || null,
             getLoadedAnchorMap: snapshots?.getLoadedAnchorMap || null,
         })).catch((err) => {
             modules = null;
@@ -96,6 +99,7 @@ function resolveProfile(ctx, settings, mods) {
         return {
             mode,
             source: 'global',
+            presetId: '',
             presetName: '',
             profile: {
                 spec: { stages: [{ id: 'single', mode: 'serial', nodes: ['single_agent'] }] },
@@ -106,7 +110,7 @@ function resolveProfile(ctx, settings, mods) {
 
     if (mode === 'agenda') {
         const override = settings.chatOverrides?.[chatKeyOf(ctx)]?.agenda;
-        if (override?.enabled) return { mode, source: 'chat', presetName: '', profile: override };
+        if (override?.enabled) return { mode, source: 'chat', presetId: '', presetName: '', profile: override };
     }
 
     const sanitize = (scope, id, raw) => {
@@ -121,19 +125,20 @@ function resolveProfile(ctx, settings, mods) {
     const cardId = String(ext?.activePresetIds?.[mode] || '');
     const cardRaw = cardId ? ext?.presetLibraries?.[mode]?.[cardId] : null;
     if (cardRaw) {
-        return { mode, source: 'character', presetName: presetDisplayName(cardRaw.name), profile: sanitize('character', cardId, cardRaw) };
+        return { mode, source: 'character', presetId: cardId, presetName: presetDisplayName(cardRaw.name), profile: sanitize('character', cardId, cardRaw) };
     }
 
     const library = settings.presetLibraries?.[mode] || {};
     let id = String(settings.activePresetIds?.[mode] || '');
     if (!library[id]) id = Object.keys(library)[0] || '';
     if (id && library[id]) {
-        return { mode, source: 'global', presetName: presetDisplayName(library[id].name), profile: sanitize('global', id, library[id]) };
+        return { mode, source: 'global', presetId: id, presetName: presetDisplayName(library[id].name), profile: sanitize('global', id, library[id]) };
     }
 
     let factory = mods.createFactoryPresetForMode?.(mode) || null;
     if (Array.isArray(factory)) factory = factory[0];
-    return { mode, source: 'global', presetName: presetDisplayName(factory?.name || 'Default'), profile: factory || {} };
+    // Nothing stored yet: editing needs the orchestrator to seed a preset first.
+    return { mode, source: 'factory', presetId: '', presetName: presetDisplayName(factory?.name || 'Default'), profile: factory || {} };
 }
 
 /** Message index (mesid) of the last user message — the floor a run belongs to. */
@@ -171,8 +176,14 @@ function readAnchors(ctx, mods) {
 
 export function createLukerSource() {
     let lastPresetName = '';
+    const host = () => {
+        const ctx = getContext();
+        return { ctx, settings: settingsOf(ctx) };
+    };
     return {
         kind: 'luker',
+        edit: createProfileAccess(host),
+        ai: createAiAccess(host),
         locale() {
             try { return getContext().getCurrentLocale?.() || navigator.language; } catch { return navigator.language; }
         },
@@ -191,7 +202,8 @@ export function createLukerSource() {
                 characterName: String(character?.name || ''),
                 enabled: Boolean(settings.enabled),
                 mode: resolved.mode,
-                source: resolved.source,
+                source: resolved.source === 'factory' ? 'global' : resolved.source,
+                target: { mode: resolved.mode, scope: resolved.source, presetId: resolved.presetId, avatar: String(character?.avatar || ''), chatKey: chatKeyOf(ctx) },
                 presetName: resolved.presetName,
                 profile: resolved.profile,
                 cardPinnedMode: character?.data?.extensions?.orchestrator?.override?.mode || '',

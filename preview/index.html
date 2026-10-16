@@ -18,6 +18,8 @@
         import { createRecorder, createMemoryStorage } from '../src/model/recorder.js';
         import { createMockRunStore } from './mock-store.js';
         import { PROFILES, PRESET_NAMES, scriptFor, playScript, createClock } from './mock-data.js';
+        import { createMockEdit, createMockAi } from './mock-ai.js';
+        const profiles = JSON.parse(JSON.stringify(PROFILES));
 
         const params = new URLSearchParams(location.search);
         let mode = params.get('mode') || 'spec';
@@ -58,7 +60,8 @@
                 return {
                     chatKey: 'char:lin.png:demo', chatId: 'demo', chatLabel: '林栖', characterName: '林栖',
                     enabled, mode, source: params.get('scope') === 'card' ? 'character' : 'global', presetName: PRESET_NAMES[mode],
-                    profile: PROFILES[mode], settings: { reviewRerunMaxRounds: 2 },
+                    target: { mode, scope: params.get('scope') === 'card' ? 'character' : 'global', presetId: 'default', avatar: 'lin.png', chatKey: 'char:lin.png:demo' },
+                    profile: JSON.parse(JSON.stringify(profiles[mode])), settings: { reviewRerunMaxRounds: 2 },
                     anchors: [
                         { floor: 6, capsuleText: '林栖刚从灯塔下来，对温澜还有戒心。写作指引：让温澜的关心藏在职业习惯里。', stageOutputs: [] },
                         { floor: 4, capsuleText: '初次见面。不要让两人太快熟络。', stageOutputs: [] },
@@ -71,6 +74,8 @@
             async setEnabled(value) { enabled = value; notify('config'); },
             async setMode(value) { mode = value; notify('config'); },
             openNative() { return false; },
+            edit: createMockEdit((m) => profiles[m], (m, p) => { profiles[m] = p; notify('config'); }),
+            ai: createMockAi(),
         };
 
         window.__lens = mountOrchestraLens({ source, recorder });
@@ -88,6 +93,8 @@
         // Screenshot helpers: preselect an agent / a timeline bar.
         setTimeout(() => {
             if (params.get('select')) window.__lens.app.selectAgent(params.get('select'));
+            if (params.get('ai') === '1') window.__lens.app.openAi();
+            if (params.get('ai') === 'diag') window.__lens.app.diagnose(window.__lens.app.run()?.key);
             const seg = params.get('seg');
             if (seg != null) {
                 const run = window.__lens.app.run();

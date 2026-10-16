@@ -65,7 +65,7 @@ function startRuntime() {
                 };
                 void refreshFlow();
                 recorder.subscribe((kind) => { if (kind === 'start') void refreshFlow().then(() => dock?.refresh()); });
-                dock = createDock({ recorder, getFlow: () => flow, openLens: (key) => open(key), onRestoreNative: () => setTakeover(false) });
+                dock = createDock({ recorder, getFlow: () => flow, openLens: (key) => open(key), onDiagnose: (key) => open(key, { diagnose: true }), onRestoreNative: () => setTakeover(false) });
             }
             return { recorder, source, dock: () => dock, takeover, takeoverEnabled, setTakeover };
         })().catch((err) => {
@@ -77,10 +77,14 @@ function startRuntime() {
     return runtimeReady;
 }
 
-async function open(runId = '') {
+async function open(runId = '', { diagnose = false } = {}) {
+    const show = () => {
+        if (runId) handle.app.openRun(runId);
+        if (runId && diagnose) handle.app.diagnose(runId);
+    };
     if (handle) {
         handle.focus();
-        if (runId) handle.app.openRun(runId);
+        show();
         return;
     }
     if (opening) return opening;
@@ -88,7 +92,7 @@ async function open(runId = '') {
         const [{ mountOrchestraLens }, { recorder, source, dock }] = await Promise.all([import('./src/app.js'), startRuntime()]);
         dock()?.close();
         handle = mountOrchestraLens({ source, recorder, takeover: { enabled: takeoverEnabled, set: setTakeover }, onClose: () => { handle = null; } });
-        if (runId) handle.app.openRun(runId);
+        show();
     })();
     try {
         await opening;

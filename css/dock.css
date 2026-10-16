@@ -129,3 +129,4 @@ html.ol-takeover .luker-run-panel-pill { display: none !important; }
     .olens.ol-dock-scrim:not([hidden]) { display: block; position: fixed; inset: 0; z-index: 8999; background: var(--ol-scrim); }
     .olens.ol-dock-pill { inset: auto 12px calc(76px + env(safe-area-inset-bottom)) auto; height: 38px; }
 }
+.olens .ol-dock-diag { display: flex; justify-content: center; padding: 4px 0 8px; }

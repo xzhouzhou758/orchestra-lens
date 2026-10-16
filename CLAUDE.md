@@ -1,6 +1,6 @@
 # CLAUDE.md — Orchestra Lens（编排透镜）
 
-Luker 第三方扩展：给内置 `orchestrator`（多智能体编排）做的可视化工作台。姊妹项目 memory-lens（`../memory-lens`），设计语言、工具函数、约定都沿用它。当前版本 0.2.0。仓库 https://github.com/xzhouzhou758/orchestra-lens ，用户在 Luker「扩展 → 安装扩展」粘贴该地址安装；改 manifest.json 和 package.json 的 version 后 Luker 会提示更新。
+Luker 第三方扩展：给内置 `orchestrator`（多智能体编排）做的可视化工作台。姊妹项目 memory-lens（`../memory-lens`），设计语言、工具函数、约定都沿用它。当前版本 0.3.0。仓库 https://github.com/xzhouzhou758/orchestra-lens ，用户在 Luker「扩展 → 安装扩展」粘贴该地址安装；改 manifest.json 和 package.json 的 version 后 Luker 会提示更新。
 
 ## 用户的硬性要求（沿用 memory-lens）
 
@@ -12,10 +12,11 @@ Luker 第三方扩展：给内置 `orchestrator`（多智能体编排）做的�
 ## 命令
 
 ```bash
-npm test             # node:test，无依赖（26 个用例）
+npm test             # node:test，无依赖（36 个用例）
 npm run preview      # http://127.0.0.1:4174/preview/index.html
 # 预览参数：mode=spec|single|agenda|loop|director  run=live|done|partial|rerun|none  at=0.55（partial 停在哪）
-#           view=flow|run|history  theme=dark|light  select=<agentId>  seg=<n>  off=1  data=error  speed=1
+#           view=flow|run|history|stats  theme=dark|light  select=<agentId>  seg=<n>  off=1  data=error  speed=1
+#           ai=1（打开 AI 助手）  ai=diag（诊断当前运行）；preview/mock-ai.js 是脚本化的假模型和内存保存
 # 运行面板预览：/preview/dock.html?stage=search|orch|done|live  mode=…  at=0.5  theme=…  expand=<n>
 ```
 
@@ -34,6 +35,12 @@ src/dock/             运行面板：dock.js（UI）、dock-model.js（纯函数
 src/model/recorder.js 可同时订阅多个运行面板 store（attach(store, 'orchestrator'|'search')），给每个 section 打时间戳，结束后存 localStorage 'orchestraLens.history.v1'（最多 30 条，正文截断 24k）
 src/views/            flow-view（卡片 + SVG 连线）、run-view（泳道时间线 + 详情）、history-view、sections（渲染思考/输出/工具/调度决定）
 src/panels/           inspector、dialog
+src/model/edit.js     纯函数：五种模式下每位助手可改的字段（system/task/description/api/preset）在 profile 里的位置、读写、diff、mergeChanges（保存时叠到最新存档上并找冲突）
+src/model/drafts.js   未保存修改（按字段的改动列表，不是整份副本）；重新加载后自动丢掉已存的、保留别的
+src/model/ai.js       纯函数：AI 工具（olens_read_agent / read_step / replace_text / set_field，在副本上执行）、提示词（助手 + 诊断）、对话循环 runTurn
+src/model/stats.js    纯函数：按历史记录算每位助手的用时 / 出错率 / 占时
+src/source-write.js   Luker 写回（edit.save / options）和 AI 调用（ai.request / sessions / replyFor）
+src/panels/           ai-panel（AI 助手 + 诊断）、change-list（改动清单 + 原文对比）、field-editor（详情栏里的可编辑块）
 preview/              mock-store.js（同名方法的假 store）、mock-data.js（五种模式的方案 + 按真实 id 规则写的回放脚本，雾港故事）
 ```
 
@@ -61,6 +68,16 @@ preview/              mock-store.js（同名方法的假 store）、mock-data.js
 - 开关：localStorage `orchestraLens.takeover`（'off' = 用原生面板），面板底部「用原生面板」和透镜历史页都能改，刷新后生效。自动打开偏好在 `orchestraLens.dock.v1`。
 - **定位的坑**：手机上 Luker 给 `<html>` 加了 transform 且高度为 0，`position:fixed; bottom:0` 会跑到屏幕顶上。面板、遮罩、胶囊都用 `viewport.js` 按 visualViewport 量出来写 px（`fitToViewport(root, { layout })`）。电脑上宽度 = 聊天栏右侧空白（`--sheldWidth`），夹在 320–420px。
 - 搜索 round id 是 `round-<n>`，在 run.js 里映射成一位「搜索助手」（`search_agent`）。
+
+## 修改与 AI（0.3.0）
+
+- 可改：每位助手的 角色设定 / 任务模板 / 说明（仅导演子助手）/ 连接配置 / 生成预设。增删助手、步骤、工具开关不做（用户说过要简单）。位置见 `edit.js` `locate()`：spec 写 `presets[preset]`（节点自带 userPromptTemplate 时写节点）；single 写 `singleAgentSystemPrompt/UserPromptTemplate`；agenda 写 `planner` / `agents[id]`；loop 写顶层 `system_prompt`；director 写 `mainAgent` / `subAgents[]`（子助手 systemPrompt 不能为空，否则 sanitize 会删掉它）。
+- 保存目标 `snapshot.target = { mode, scope: global|character|chat|factory, presetId, avatar, chatKey }`。factory = 还没存过方案，不能改（提示先在原生面板保存一次）。保存：重读同一目标 → `mergeChanges` 只叠改过的字段 → 冲突（那个字段在别处也改了）弹窗确认 → 写回 → `editor-state.js initializeUiState(ctx)` + 触发 `#luker_orch_execution_mode` change，让原生编辑器丢掉旧草稿（不然它下次保存会把我们的改动盖回去，已在真实 Luker 验证）。撤销 = 用反向改动强制保存。
+- 角色卡写回用 `getExtensionApi('orchestrator').persistOrchestratorCharacterExtension`；`writeExtensionField` 不发事件，所以别处改角色卡后透镜不会自动刷新（通常原生面板随后会 saveSettings 触发刷新）。
+- AI：`requestToolCallsWithRetry(ctx, {toolCallRetryMax, rpmLimit}, {taskMessages, apiPresetName, llmPresetName, tools, includeAssistantText:true, allowNoToolCalls:true})`。模型默认 = 编排器 `requestApiPresetName/requestLlmPresetName`（迭代 AI），透镜自己的选择存 `extensionSettings.orchestra_lens.ai`。用户的生成预设（含破限）照常包在外面，不要动。对话存 localStorage `orchestraLens.ai.v1`，按 target 分组，每组最多 12 条。
+- AI 在自己的副本上改；一轮结束 `diffProfiles(草稿, AI 副本)` 得到改动清单，勾选后进草稿；没勾的 / 撤销的会回写到 tool_result 让 AI 知道。
+- 诊断：`runSteps(view)` 把运行编号成步骤（短摘要进首条消息，全文用 olens_read_step 取）；首条消息还带最终结果和主模型回复（`replyFor`：run.floor 之后第一条非用户消息）。入口：运行页「AI 诊断」、时间线段「诊断这一步」、详情栏「AI 诊断这一步」、运行面板底部。
+- 已在真实 Luker 2.8.0 验证（临时数据目录 + 本地假 OpenAI 兼容接口）：通用方案保存 / 撤销 / 落盘、原生编辑器草稿同步、角色卡方案写入（png 里有）、冲突提示、AI 三轮工具调用、诊断入口。未用真实模型测过提示词效果。
 
 ## 已验证 / 未验证
 
