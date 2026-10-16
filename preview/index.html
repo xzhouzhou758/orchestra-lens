@@ -1,0 +1,100 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+    <meta charset="utf-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+    <title>Orchestra Lens · Preview</title>
+    <link rel="stylesheet" href="../style.css">
+    <style>html, body { margin: 0; height: 100%; background: #0d0e11; }</style>
+</head>
+<body>
+    <script type="module">
+        // Preview params:
+        //   mode=spec|single|agenda|loop|director   execution mode
+        //   run=live|done|partial|none|rerun         live = replay in real time; done/partial = instant
+        //   theme=dark|light  view=flow|run|history  data=error  off=1 (orchestration disabled)
+        //   select=<agentId>  seg=<n> (select the n-th timeline bar)
+        import { mountOrchestraLens } from '../src/app.js';
+        import { createRecorder, createMemoryStorage } from '../src/model/recorder.js';
+        import { createMockRunStore } from './mock-store.js';
+        import { PROFILES, PRESET_NAMES, scriptFor, playScript, createClock } from './mock-data.js';
+
+        const params = new URLSearchParams(location.search);
+        let mode = params.get('mode') || 'spec';
+        let enabled = params.get('off') !== '1';
+        const runMode = params.get('run') || 'done';
+        const prefs = JSON.parse(localStorage.getItem('orchestraLens.prefs.v1') || '{}');
+        for (const key of ['theme', 'view']) if (params.get(key)) prefs[key] = params.get(key);
+        localStorage.setItem('orchestraLens.prefs.v1', JSON.stringify(prefs));
+
+        const instant = runMode !== 'live';
+        const clock = createClock(performance.now());
+        const now = instant ? clock.now : () => performance.now();
+        const store = createMockRunStore({ now });
+        let wall = Date.now() - 6 * 60000;
+        const recorder = createRecorder({
+            storage: createMemoryStorage(),
+            now,
+            wallNow: () => (instant ? (wall += 0) : Date.now()),
+            getRunContext: () => ({ chatId: 'demo', chatLabel: '林栖', floor: 14, presetName: PRESET_NAMES[mode] }),
+        });
+        recorder.attach(store);
+
+        // A few older runs for the history view.
+        const seed = [['spec', { rerun: true }], ['spec', {}], ['loop', {}]];
+        seed.forEach(([m, opts], i) => {
+            wall = Date.now() - (3 - i) * 26 * 60000 - 86400000 * (i === 0 ? 1 : 0);
+            playScript(store, scriptFor(m, opts), { speed: Infinity, clock });
+        });
+        wall = Date.now() - 40000;
+
+        let listeners = [];
+        const notify = (kind) => listeners.forEach(fn => fn(kind));
+        const source = {
+            kind: 'mock',
+            async load() {
+                await new Promise(r => setTimeout(r, 80));
+                if (params.get('data') === 'error') throw Object.assign(new Error('mock'), { code: 'no-extension' });
+                return {
+                    chatKey: 'char:lin.png:demo', chatId: 'demo', chatLabel: '林栖', characterName: '林栖',
+                    enabled, mode, source: params.get('scope') === 'card' ? 'character' : 'global', presetName: PRESET_NAMES[mode],
+                    profile: PROFILES[mode], settings: { reviewRerunMaxRounds: 2 },
+                    anchors: [
+                        { floor: 6, capsuleText: '林栖刚从灯塔下来，对温澜还有戒心。写作指引：让温澜的关心藏在职业习惯里。', stageOutputs: [] },
+                        { floor: 4, capsuleText: '初次见面。不要让两人太快熟络。', stageOutputs: [] },
+                    ],
+                };
+            },
+            async runStore() { return store; },
+            runContext: () => ({ chatId: 'demo', chatLabel: '林栖', floor: 14, presetName: PRESET_NAMES[mode] }),
+            subscribe(fn) { listeners.push(fn); return () => { listeners = listeners.filter(x => x !== fn); }; },
+            async setEnabled(value) { enabled = value; notify('config'); },
+            async setMode(value) { mode = value; notify('config'); },
+            openNative() { return false; },
+        };
+
+        window.__lens = mountOrchestraLens({ source, recorder });
+        window.__play = (m = mode, speed = 1) => playScript(store, scriptFor(m), { speed });
+
+        const script = scriptFor(mode, { rerun: runMode === 'rerun' });
+        if (runMode === 'live') {
+            setTimeout(() => playScript(store, script, { speed: Number(params.get('speed') || 1) }), 600);
+        } else if (runMode === 'partial') {
+            playScript(store, script, { speed: Infinity, clock, stopAt: Math.floor(script.steps.length * Number(params.get('at') || 0.55)) });
+        } else if (runMode !== 'none') {
+            playScript(store, script, { speed: Infinity, clock });
+        }
+
+        // Screenshot helpers: preselect an agent / a timeline bar.
+        setTimeout(() => {
+            if (params.get('select')) window.__lens.app.selectAgent(params.get('select'));
+            const seg = params.get('seg');
+            if (seg != null) {
+                const run = window.__lens.app.run();
+                const target = run?.segments[Number(seg)];
+                if (target) window.__lens.app.selectSegment(target.key, target.agentId);
+            }
+        }, 300);
+    </script>
+</body>
+</html>
