@@ -1,6 +1,6 @@
 # CLAUDE.md — Orchestra Lens（编排透镜）
 
-Luker 第三方扩展：给内置 `orchestrator`（多智能体编排）做的可视化工作台。姊妹项目 memory-lens（`../memory-lens`），设计语言、工具函数、约定都沿用它。当前版本 0.1.0，**尚未推送到 GitHub**。
+Luker 第三方扩展：给内置 `orchestrator`（多智能体编排）做的可视化工作台。姊妹项目 memory-lens（`../memory-lens`），设计语言、工具函数、约定都沿用它。当前版本 0.1.0。仓库 https://github.com/xzhouzhou758/orchestra-lens ，用户在 Luker「扩展 → 安装扩展」粘贴该地址安装；改 manifest.json 和 package.json 的 version 后 Luker 会提示更新。
 
 ## 用户的硬性要求（沿用 memory-lens）
 
