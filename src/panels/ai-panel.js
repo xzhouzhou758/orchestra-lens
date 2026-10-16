@@ -10,7 +10,7 @@ import { h, clear, put, formatTime } from '../util.js';
 import { icon } from '../icons.js';
 import { agentName } from '../i18n.js';
 import { button, iconButton, checkRow, isTouch } from '../ui/components.js';
-import { runTurn, newSession, sessionTitle, upsertSession, toolCallText, isEditTool, markEdits, makeId, toolSet, systemPrompt, runSteps, diagnoseMessage } from '../model/ai.js';
+import { runTurn, newSession, sessionTitle, upsertSession, toolCallText, isEditTool, markEdits, makeId, toolSet, systemPrompt, runSteps, diagnoseMessage, statsMessage } from '../model/ai.js';
 import { diffProfiles } from '../model/edit.js';
 import { targetKey } from '../model/drafts.js';
 import { changeList } from './change-list.js';
@@ -135,11 +135,20 @@ export function createAiPanel(app, host) {
         return { raw, view, steps: runSteps(view) };
     }
 
+    const isDiag = () => session.kind === 'diagnose' || session.kind === 'stats';
+
     function paintContext() {
         clear(context);
-        context.hidden = session.kind !== 'diagnose';
-        titleEl.textContent = session.kind === 'diagnose' ? 'AI 诊断' : 'AI 助手';
+        context.hidden = !isDiag();
+        titleEl.textContent = isDiag() ? 'AI 诊断' : 'AI 助手';
         if (context.hidden) return;
+        if (session.kind === 'stats') {
+            const st = session.statsCtx;
+            put(context, icon('timeline', { size: 13 }),
+                h('span', { class: 'ol-ai-context-text', text: st ? `统计 · 最近 ${st.stats.runs} 次运行${st.focus ? ` · 「${agentName(st.focus)}」` : ''}` : '统计' }),
+                button('查看', () => app.setState({ view: 'stats' }), { className: 'ol-btn-sm ol-btn-ghost' }));
+            return;
+        }
         const ctx = diagnosisContext();
         const raw = ctx?.raw;
         const step = session.step && ctx?.steps?.[session.step - 1];
@@ -151,6 +160,15 @@ export function createAiPanel(app, host) {
 
     // ----- Rendering ----------------------------------------------------------
 
+    // In a stats session the numbered items are evidence (E1…), not run steps.
+    function readText(call) {
+        if (session.kind === 'stats' && call.name === 'olens_read_step') {
+            const e = session.statsCtx?.evidence?.[Number(call.args?.step) - 1];
+            return e ? `查看「${agentName(e.agentId)}」${e.label}的过程` : `查看证据 E${call.args?.step}`;
+        }
+        return toolCallText(call);
+    }
+
     function paintSend() {
         clear(sendBtn);
         sendBtn.setAttribute('aria-label', busy ? '停止' : '发送');
@@ -159,9 +177,9 @@ export function createAiPanel(app, host) {
         put(sendBtn, icon(busy ? 'stop' : 'arrowUp', { size: 15 }));
         sendBtn.disabled = status !== 'ready';
         input.disabled = status !== 'ready';
-        input.placeholder = session.kind === 'diagnose' && !session.messages.length
-            ? '哪里不满意？（可以不写，直接发送让 AI 自己找）'
-            : session.kind === 'diagnose' ? '继续追问，或让 AI 按诊断结果修改' : '想怎么改编排？比如「让审稿别再打回小问题」';
+        input.placeholder = isDiag() && !session.messages.length
+            ? (session.kind === 'stats' ? '想重点看什么？（可以不写，直接发送）' : '哪里不满意？（可以不写，直接发送让 AI 自己找）')
+            : isDiag() ? '继续追问，或让 AI 按诊断结果修改' : '想怎么改编排？比如「让审稿别再打回小问题」';
     }
 
     function paint() {
@@ -176,6 +194,17 @@ export function createAiPanel(app, host) {
             put(log, h('div', { class: 'ol-ai-note is-warn', text: app.editBlockedReason() || '当前方案不能在这里修改，AI 只能给建议。' }));
         }
         if (!session.messages.length) {
+            if (session.kind === 'stats') {
+                const st = session.statsCtx;
+                put(log, h('div', { class: 'ol-ai-empty' },
+                    h('p', { class: 'ol-ai-empty-title', text: st?.focus ? `诊断「${agentName(st.focus)}」` : '根据统计诊断' }),
+                    h('p', { class: 'ol-ai-empty-sub', text: `AI 会看最近 ${st?.stats.runs || 0} 次运行的统计，再翻出${st?.focus ? '它' : '最慢、最常出错的助手'}出错和最慢的那几次过程，找出原因，能改的直接给出修改。` }),
+                    h('div', { class: 'ol-ai-suggest' }, (st?.focus ? ['它为什么这么慢', '它为什么会出错', '给它换个更快的模型'] : ['想让整体快一些', '出错太多，看看为什么', '能不能给慢的助手换个快模型']).map(text => h('button', {
+                        type: 'button', class: 'ol-ai-chip', onClick: () => { input.value = text; fit(); input.focus(); },
+                    }, h('span', { text })))),
+                    button('直接开始诊断', () => send({ allowEmpty: true }), { iconName: 'sparkle', className: 'ol-btn-sm ol-btn-primary' })));
+                return;
+            }
             if (session.kind === 'diagnose') {
                 put(log, h('div', { class: 'ol-ai-empty' },
                     h('p', { class: 'ol-ai-empty-title', text: session.step ? '诊断这一步' : '诊断这次运行' }),
@@ -208,7 +237,7 @@ export function createAiPanel(app, host) {
             const reads = calls.filter(c => !isEditTool(c.name));
             const edits = calls.filter(c => isEditTool(c.name));
             put(log, h('div', { class: 'ol-ai-msg is-ai' },
-                reads.length ? h('div', { class: 'ol-ai-reads', text: reads.length === 1 ? toolCallText(reads[0]) : `查阅了 ${reads.length} 处资料` }) : null,
+                reads.length ? h('div', { class: 'ol-ai-reads', text: reads.length === 1 ? readText(reads[0]) : `查阅了 ${reads.length} 处资料` }) : null,
                 edits.length ? h('ul', { class: 'ol-ai-tools' }, edits.map(c => {
                     const r = results.get(String(c.id));
                     const noop = r?.content?.status === 'noop';
@@ -219,7 +248,7 @@ export function createAiPanel(app, host) {
             const turn = [...turns.values()].find(x => x.endId === m.id);
             if (turn) put(log, turnCard(turn));
         }
-        if (busy) put(log, h('div', { class: 'ol-ai-thinking' }, h('span', { class: 'ol-spinner', 'aria-hidden': 'true' }), h('span', { text: session.kind === 'diagnose' ? '正在分析…' : '正在思考…' })));
+        if (busy) put(log, h('div', { class: 'ol-ai-thinking' }, h('span', { class: 'ol-spinner', 'aria-hidden': 'true' }), h('span', { text: isDiag() ? '正在分析…' : '正在思考…' })));
         requestAnimationFrame(() => { log.scrollTop = log.scrollHeight; });
     }
 
@@ -279,7 +308,7 @@ export function createAiPanel(app, host) {
 
     async function send({ allowEmpty = false } = {}) {
         const text = input.value.trim();
-        if ((!text && !(allowEmpty || (session.kind === 'diagnose' && !session.messages.length))) || busy || status !== 'ready') return;
+        if ((!text && !(allowEmpty || (isDiag() && !session.messages.length))) || busy || status !== 'ready') return;
         syncScope();
         const diag = diagnosisContext();
         if (session.kind === 'diagnose' && diag?.missing) {
@@ -294,7 +323,15 @@ export function createAiPanel(app, host) {
             userMsg.content = diagnoseMessage({ view: diag.view, steps: diag.steps, reply: access.replyFor?.(diag.raw) || '', focusStep: session.step || 0, complaint: text });
             userMsg.display = text ? `诊断：${text}` : (session.step ? '诊断这一步' : '诊断这次运行');
         }
-        if (first) session.title = session.kind === 'diagnose' ? `诊断 · ${text || (session.step ? `第 ${session.step} 步` : '这次运行')}` : sessionTitle(text);
+        const st = session.statsCtx;
+        if (session.kind === 'stats' && first) {
+            userMsg.content = statsMessage({ stats: st.stats, evidence: st.evidence, mode: st.mode, focus: st.focus, complaint: text });
+            userMsg.display = text ? `统计诊断：${text}` : (st.focus ? `诊断「${agentName(st.focus)}」` : '根据统计诊断');
+        }
+        if (first) {
+            session.title = session.kind === 'stats' ? `统计诊断 · ${text || (st.focus ? agentName(st.focus) : '整体')}`
+                : session.kind === 'diagnose' ? `诊断 · ${text || (session.step ? `第 ${session.step} 步` : '这次运行')}` : sessionTitle(text);
+        }
         session.messages.push(userMsg);
         busy = true;
         controller = new AbortController();
@@ -307,9 +344,9 @@ export function createAiPanel(app, host) {
             const out = await runTurn((args) => access.request(args), session, {
                 mode: m,
                 profile: startCopy,
-                system: (live) => systemPrompt({ mode: m, profile: live, options, diagnose: session.kind === 'diagnose' }),
-                tools: toolSet({ withRun: session.kind === 'diagnose' }),
-                steps: diag?.steps || [],
+                system: (live) => systemPrompt({ mode: m, profile: live, options, diagnose: session.kind === 'stats' ? 'stats' : session.kind === 'diagnose' }),
+                tools: toolSet({ withRun: isDiag() }),
+                steps: session.kind === 'stats' ? (st?.evidence || []) : (diag?.steps || []),
                 options,
                 signal: controller.signal,
                 onUpdate: () => paint(),
@@ -343,6 +380,8 @@ export function createAiPanel(app, host) {
     function persist() {
         if (!scope) return;
         const stored = { ...session, messages: session.messages.filter(x => x.role !== 'note') };
+        // Evidence bodies can be long; keep enough for a resumed chat to re-read.
+        if (stored.statsCtx) stored.statsCtx = { ...stored.statsCtx, evidence: stored.statsCtx.evidence.map(e => ({ ...e, full: e.full.slice(0, 8000) })) };
         sessions = upsertSession(sessions, stored);
         try { access.saveSessions(scope, sessions); } catch { /* best effort */ }
     }
@@ -379,7 +418,7 @@ export function createAiPanel(app, host) {
                     paint();
                 },
             },
-            s.kind === 'diagnose' ? icon('target', { size: 12 }) : icon('sparkle', { size: 12 }),
+            s.kind === 'stats' ? icon('timeline', { size: 12 }) : s.kind === 'diagnose' ? icon('target', { size: 12 }) : icon('sparkle', { size: 12 }),
             h('span', { class: 'ol-ai-history-title', text: s.title || '未命名对话' }),
             h('span', { class: 'ol-ai-history-meta', text: new Date(s.at).toLocaleString('zh-CN', { month: 'numeric', day: 'numeric', hour: '2-digit', minute: '2-digit' }) })),
             iconButton('trash', '删除这条记录', () => {
@@ -398,7 +437,7 @@ export function createAiPanel(app, host) {
         /** Opens a chat with a prefilled request. */
         ask(text = '') {
             syncScope();
-            if (session.kind === 'diagnose' || session.messages.length > 6) startNew('chat');
+            if (isDiag() || session.messages.length > 6) startNew('chat');
             if (text) { input.value = text; fit(); }
             paint();
             requestAnimationFrame(() => { input.focus(); input.setSelectionRange(input.value.length, input.value.length); });
@@ -407,6 +446,11 @@ export function createAiPanel(app, host) {
         diagnose(runKey, step = 0) {
             syncScope();
             if (!startNew('diagnose', { runKey, step: Number(step) || 0 })) app.notify('AI 正在回复，请稍候', { error: true });
+        },
+        /** Starts a diagnosis from the stats view. `ctx` = { stats, evidence, mode, focus }, frozen into the session. */
+        diagnoseStats(ctx) {
+            syncScope();
+            if (!startNew('stats', { statsCtx: ctx })) app.notify('AI 正在回复，请稍候', { error: true });
         },
         /** Profile / target changed (reload, chat switch). */
         refresh() {

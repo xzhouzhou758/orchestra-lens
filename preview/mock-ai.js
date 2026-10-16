@@ -39,6 +39,7 @@ export function createMockAi() {
             });
             const system = messages[0].content;
             const diagnose = /这次的任务：诊断/.test(system);
+            const statsMode = /这次的任务：统计诊断/.test(system);
             const tail = messages.slice(1);
             const lastUser = [...tail].reverse().find(m => m.role === 'user');
             const sinceUser = tail.slice(tail.lastIndexOf(lastUser) + 1);
@@ -46,7 +47,7 @@ export function createMockAi() {
             const agent = pickAgent(system);
             if (toolTurns === 0) {
                 const calls = [{ id: `r${Date.now()}`, name: 'olens_read_agent', args: { agent_id: agent } }];
-                if (diagnose) calls.unshift({ id: `s${Date.now()}`, name: 'olens_read_step', args: { step: 2 } });
+                if (diagnose || statsMode) calls.unshift({ id: `s${Date.now()}`, name: 'olens_read_step', args: { step: statsMode ? 1 : 2 } });
                 return { assistantText: '', toolCalls: calls };
             }
             if (toolTurns === 1) {
@@ -64,7 +65,9 @@ export function createMockAi() {
                 };
             }
             return {
-                assistantText: diagnose
+                assistantText: statsMode
+                    ? '结论：最该处理的是「审稿」。它平均用时最长，而且每次打回都会让「剧情规划」重做一遍，整次运行因此多花 30% 左右的时间。\n\n依据：\n· 审稿的最慢一次（E2）列了 7 条意见，其中 5 条是文风上的小问题；\n· 最快一次（E3）只检查了硬规则，2 秒就通过了。\n\n我改了「审稿」的角色设定：只有违反硬规则才打回，小问题写成备注。如果还想更快，可以给它换个快一点的连接配置。'
+                    : diagnose
                     ? '结论：问题出在第 2 步「世界书守门」之后的审查环节，「审稿」把小问题也当成硬伤打回，导致规划重做了一次、整体慢了 8 秒。\n\n依据：\n· 审稿给出的打回理由是「节奏略快」，不属于硬规则；\n· 重做后的规划和第一次几乎一样。\n\n我改了「审稿」的角色设定：只有违反硬规则才打回，小问题写成备注交给汇总。'
                     : '我调整了「审稿」的角色设定：只在违反硬规则时打回，小问题改成备注，避免无谓的重做。其他助手的职责没有重叠，暂时不用改。',
                 toolCalls: [],

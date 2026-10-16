@@ -142,7 +142,7 @@
 .olens .ol-scard-value { font-size: 18px; font-weight: 650; font-variant-numeric: tabular-nums; }
 .olens .ol-scard-note { font-size: 11.5px; color: var(--ol-text-faint); }
 .olens .ol-stable { display: grid; border-radius: var(--ol-radius-lg); border: 1px solid var(--ol-border); background: var(--ol-surface); overflow: hidden; }
-.olens .ol-srow { display: grid; grid-template-columns: minmax(150px, 1.4fr) minmax(140px, 2fr) 80px 96px 88px 56px; align-items: center; gap: 12px; padding: 8px 14px; border: 0; border-top: 1px solid var(--ol-border); background: none; text-align: left; cursor: pointer; width: 100%; }
+.olens .ol-srow { display: grid; grid-template-columns: minmax(160px, 1.4fr) minmax(160px, 2fr) 84px 100px 88px 52px 28px; align-items: center; gap: 12px; padding: 8px 14px; border: 0; border-top: 1px solid var(--ol-border); background: none; text-align: left; cursor: pointer; width: 100%; }
 .olens .ol-srow:hover:not(.is-head) { background: var(--ol-hover); }
 .olens .ol-srow.is-head { border-top: 0; cursor: default; font-size: 11px; font-weight: 600; color: var(--ol-text-faint); background: var(--ol-surface-2); }
 .olens .ol-scol-agent { display: flex; align-items: center; gap: 8px; min-width: 0; }
@@ -151,7 +151,11 @@
 .olens .ol-scol-bar { display: flex; align-items: center; gap: 8px; min-width: 0; }
 .olens .ol-sbar { flex: 1; height: 8px; border-radius: 999px; background: var(--ol-hover); overflow: hidden; }
 .olens .ol-sbar > span { display: block; height: 100%; border-radius: inherit; background: var(--ol-tone, var(--ol-accent)); }
-.olens .ol-sbar-text { flex: none; width: 56px; font-variant-numeric: tabular-nums; font-size: 12px; }
+.olens .ol-sbar-text { flex: none; min-width: 72px; white-space: nowrap; font-variant-numeric: tabular-nums; font-size: 12px; }
+.olens .ol-scol-act { display: flex; justify-content: flex-end; }
+.olens .ol-srow .ol-scol-act .ol-iconbtn { opacity: 0.55; }
+.olens .ol-srow:hover .ol-scol-act .ol-iconbtn, .olens .ol-srow .ol-scol-act .ol-iconbtn:focus-visible { opacity: 1; color: var(--ol-accent); }
+.olens .ol-scol-agent .ol-lane-name { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .olens .ol-stag { flex: none; font-size: 10.5px; font-weight: 600; padding: 0 6px; border-radius: 999px; }
 .olens .ol-stag.is-slow { color: var(--ol-recalled); background: var(--ol-recalled-soft); }
 .olens .ol-stag.is-bad { color: var(--ol-danger); background: var(--ol-danger-soft); }
@@ -167,7 +171,7 @@
 .olens.is-compact .ol-ai-input { font-size: 16px; }
 .olens.is-compact .ol-savebar { padding: 6px 10px 6px 14px; flex-wrap: wrap; }
 .olens.is-compact .ol-stats-body { padding: 6px 12px 32px; }
-.olens.is-compact .ol-srow { grid-template-columns: 1fr 96px 56px; }
+.olens.is-compact .ol-srow { grid-template-columns: 1fr 84px 64px 32px; }
 .olens.is-compact .ol-srow > :nth-child(3), .olens.is-compact .ol-srow > :nth-child(4), .olens.is-compact .ol-srow > :nth-child(6) { display: none; }
 .olens.is-compact .ol-scol-bar .ol-sbar { display: none; }
 .olens.is-compact .ol-select { height: 36px; font-size: 16px; }

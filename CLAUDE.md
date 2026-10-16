@@ -12,7 +12,7 @@ Luker 第三方扩展：给内置 `orchestrator`（多智能体编排）做的�
 ## 命令
 
 ```bash
-npm test             # node:test，无依赖（36 个用例）
+npm test             # node:test，无依赖（37 个用例）
 npm run preview      # http://127.0.0.1:4174/preview/index.html
 # 预览参数：mode=spec|single|agenda|loop|director  run=live|done|partial|rerun|none  at=0.55（partial 停在哪）
 #           view=flow|run|history|stats  theme=dark|light  select=<agentId>  seg=<n>  off=1  data=error  speed=1
@@ -76,6 +76,7 @@ preview/              mock-store.js（同名方法的假 store）、mock-data.js
 - 角色卡写回用 `getExtensionApi('orchestrator').persistOrchestratorCharacterExtension`；`writeExtensionField` 不发事件，所以别处改角色卡后透镜不会自动刷新（通常原生面板随后会 saveSettings 触发刷新）。
 - AI：`requestToolCallsWithRetry(ctx, {toolCallRetryMax, rpmLimit}, {taskMessages, apiPresetName, llmPresetName, tools, includeAssistantText:true, allowNoToolCalls:true})`。模型默认 = 编排器 `requestApiPresetName/requestLlmPresetName`（迭代 AI），透镜自己的选择存 `extensionSettings.orchestra_lens.ai`。用户的生成预设（含破限）照常包在外面，不要动。对话存 localStorage `orchestraLens.ai.v1`，按 target 分组，每组最多 12 条。
 - AI 在自己的副本上改；一轮结束 `diffProfiles(草稿, AI 副本)` 得到改动清单，勾选后进草稿；没勾的 / 撤销的会回写到 tool_result 让 AI 知道。
+- 统计诊断（统计页「AI 诊断」/ 每行的靶心）：`statsEvidence(stats, views, {focus})` 挑出要看的助手（出错的优先，再按占时）各自的出错段、最慢段、最快段（对照），编号 E1…，和统计表一起用 `statsMessage` 发出；session.kind='stats'，统计和证据冻结在 `session.statsCtx`（存档时证据截到 8000 字），olens_read_step 读的是证据编号。提示词 `STATS`：先分清接口错误（429/超时/key/上下文超长 → 换连接，不改提示词）和提示词/模型问题；慢就对比快慢两次。
 - 诊断：`runSteps(view)` 把运行编号成步骤（短摘要进首条消息，全文用 olens_read_step 取）；首条消息还带最终结果和主模型回复（`replyFor`：run.floor 之后第一条非用户消息）。入口：运行页「AI 诊断」、时间线段「诊断这一步」、详情栏「AI 诊断这一步」、运行面板底部。
 - 已在真实 Luker 2.8.0 验证（临时数据目录 + 本地假 OpenAI 兼容接口）：通用方案保存 / 撤销 / 落盘、原生编辑器草稿同步、角色卡方案写入（png 里有）、冲突提示、AI 三轮工具调用、诊断入口。未用真实模型测过提示词效果。
 

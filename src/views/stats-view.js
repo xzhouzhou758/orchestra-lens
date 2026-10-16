@@ -8,7 +8,8 @@ import { icon } from '../icons.js';
 import { t, agentName, modeInfo } from '../i18n.js';
 import { agentStats } from '../model/stats.js';
 import { formatDuration, formatTokens } from '../model/run.js';
-import { emptyState, segmented } from '../ui/components.js';
+import { statsEvidence } from '../model/ai.js';
+import { emptyState, segmented, button, iconButton } from '../ui/components.js';
 import { agentAvatar, toneOf } from './flow-view.js';
 
 export function createStatsView(app) {
@@ -31,12 +32,20 @@ export function createStatsView(app) {
         const mode = app.snapshot()?.mode || '';
         const sameMode = (r) => source === 'search' || !mode || r.mode === mode || (mode === 'single' && r.mode === 'spec');
         const runs = (scope === 'chat' && chatId ? all.filter(r => r.chatId === chatId) : all).filter(sameMode);
-        const stats = agentStats(runs, { knownIds: Object.keys(app.flow()?.agents || {}), source });
+        const knownIds = Object.keys(app.flow()?.agents || {});
+        const stats = agentStats(runs, { knownIds, source });
+        // Frozen into the AI session: later runs don't change what it was asked about.
+        const diagnose = (focus = '') => {
+            const views = runs.filter(r => (r.source || 'orchestrator') === source && r.status !== 'running' && !r.quiet).map(r => app.runViewOf(r));
+            app.diagnoseStats({ stats, evidence: statsEvidence(stats, views, { focus }), mode: source === 'search' ? 'search' : mode, focus });
+        };
+        const canAi = Boolean(app.source?.ai) && source === 'orchestrator';
         put(el, h('div', { class: 'ol-history-head' },
             h('div', null,
                 h('h2', { text: '统计' }),
                 h('p', { class: 'ol-history-hint', text: `根据本机记下的最近运行计算${source === 'orchestrator' && mode ? `（只算「${modeInfo(mode).label}」模式）` : ''}。找出最慢、最常出错的助手，考虑给它换更快的模型或精简提示词。` })),
             h('span', { class: 'ol-spacer' }),
+            canAi && stats.runs ? button('AI 诊断', () => diagnose(), { iconName: 'target', className: 'ol-btn-sm ol-btn-primary', title: '让 AI 根据统计找出最慢、最常出错的助手的原因，并直接修改' }) : null,
             segmented([{ value: 'orchestrator', label: '编排' }, { value: 'search', label: '联网搜索' }], source, (value) => { source = value; render(); }, { className: 'ol-seg-sm' }),
             segmented([{ value: 'chat', label: t('thisChat') }, { value: 'all', label: t('allChats') }], scope, (value) => { scope = value; render(); }, { className: 'ol-seg-sm' })));
         const body = h('div', { class: 'ol-stats-body' });
@@ -63,7 +72,8 @@ export function createStatsView(app) {
                     h('span', { role: 'columnheader', class: 'ol-scol-num', text: '最长' }),
                     h('span', { role: 'columnheader', class: 'ol-scol-num', text: '出现' }),
                     h('span', { role: 'columnheader', class: 'ol-scol-num', text: '出错' }),
-                    h('span', { role: 'columnheader', class: 'ol-scol-num', title: '占所有助手工作时间的比例（同时进行的都算）', text: '占时' })),
+                    h('span', { role: 'columnheader', class: 'ol-scol-num', title: '占所有助手工作时间的比例（同时进行的都算）', text: '占时' }),
+                    h('span', { role: 'columnheader' })),
                 stats.agents.map(a => h('button', {
                     type: 'button',
                     class: 'ol-srow',
@@ -83,8 +93,9 @@ export function createStatsView(app) {
                 h('span', { class: 'ol-scol-num', role: 'cell', text: formatDuration(a.max) }),
                 h('span', { class: 'ol-scol-num', role: 'cell', text: a.steps > a.runs ? `${a.runs} 次 · ${a.steps} 段` : `${a.runs} 次` }),
                 h('span', { class: `ol-scol-num${a.failed ? ' is-bad' : ''}`, role: 'cell', text: a.failed ? `${a.failed}（${Math.round(a.failRate * 100)}%）` : '—' }),
-                h('span', { class: 'ol-scol-num', role: 'cell', text: `${Math.round(a.share * 100)}%` })))),
-            h('p', { class: 'ol-stats-note' }, icon('alert', { size: 12 }), h('span', { text: '消耗的 tokens 只按整次运行记录，没法分到每位助手。点一行可以查看并修改这位助手的设定。' })));
+                h('span', { class: 'ol-scol-num', role: 'cell', text: `${Math.round(a.share * 100)}%` }),
+                h('span', { class: 'ol-scol-act', role: 'cell' }, canAi ? iconButton('target', `AI 诊断「${agentName(a.agentId)}」`, (event) => { event.stopPropagation(); diagnose(a.agentId); }, { className: 'ol-iconbtn-sm' }) : null)))),
+            h('p', { class: 'ol-stats-note' }, icon('alert', { size: 12 }), h('span', { text: '消耗的 tokens 只按整次运行记录，没法分到每位助手。点一行可以查看并修改这位助手的设定，点右侧的靶心让 AI 单独诊断它。' })));
     }
 
     return { id: 'stats', el, render };

@@ -162,3 +162,35 @@ test('drafts survive a reload that changed other fields, and drop saved ones', (
     d.restore(snap);
     assert.equal(d.count(), 1);
 });
+
+import { statsEvidence, statsMessage } from '../src/model/ai.js';
+
+test('stats diagnosis: evidence picks failures and slow/fast steps, message carries the table', () => {
+    const raws = [...recorded('spec'), ...recorded('spec', { rerun: true }), ...recorded('spec')];
+    // Make one planner step fail.
+    const failing = JSON.parse(JSON.stringify(raws[0]));
+    const round = failing.rounds.find(r => r.sections.some(s => s.id === 'node-planner'));
+    const sec = round.sections.find(s => s.id === 'node-planner');
+    sec.status = 'failed';
+    sec.meta = { ...(sec.meta || {}), err: '429 Too Many Requests' };
+    const runs = [failing, ...raws.slice(1)];
+    const stats = agentStats(runs);
+    const views = runs.map(r => buildRunView(r));
+    const ev = statsEvidence(stats, views);
+    assert.ok(ev.length >= 2);
+    assert.equal(ev[0].agentId, 'planner', 'failing agent comes first');
+    assert.equal(ev[0].label, '出错');
+    assert.match(ev[0].full, /429/);
+    assert.ok(ev.some(e => e.label === '最慢的一次'));
+    const one = statsEvidence(stats, views, { focus: 'critic' });
+    assert.ok(one.length && one.every(e => e.agentId === 'critic'));
+    const msg = statsMessage({ stats, evidence: ev, mode: 'spec' });
+    assert.match(msg, /最近 3 次「流水线」运行/);
+    assert.match(msg, /planner（剧情规划）.*出错 1/);
+    assert.match(msg, /429/);
+    assert.match(msg, /E1\. planner/);
+    assert.match(systemPrompt({ mode: 'spec', profile: PROFILES.spec, diagnose: 'stats' }), /统计诊断/);
+    // olens_read_step reads evidence by number.
+    const read = executeTools([{ id: 'x', name: 'olens_read_step', args: { step: 1 } }], { mode: 'spec', profile: PROFILES.spec, steps: ev });
+    assert.match(read.results[0].result, /E1\. planner/);
+});

@@ -103,6 +103,7 @@ export function mountOrchestraLens({ source, container = document.body, onClose 
         modelOptions: () => modelOptions,
         openAi: (text = '') => openAi(text),
         diagnose: (key, step = 0) => openDiagnose(key, step),
+        diagnoseStats: (ctx) => { if (!aiPanel) return; store.set({ aiOpen: true, sheet: false }); aiPanel.diagnoseStats(ctx); },
         focusField: (agentId) => { if (flow?.agents?.[agentId]) store.set({ selectedAgent: agentId, ...(store.get().compact ? {} : { inspectorOpen: true }) }); },
         /** The run shown in the run view: pinned history entry, else the live / latest one. */
         run() {
@@ -414,7 +415,7 @@ export function mountOrchestraLens({ source, container = document.body, onClose 
         root.classList.toggle('is-compact', state.compact);
         root.classList.toggle('is-touch', isTouch());
         // The flow needs the width; its inspector only appears for a selected agent.
-        const inspectorWanted = state.inspectorOpen && (state.view !== 'flow' || Boolean(state.selectedAgent));
+        const inspectorWanted = state.inspectorOpen && (!['flow', 'stats'].includes(state.view) || Boolean(state.selectedAgent));
         root.classList.toggle('inspector-open', state.compact ? state.sheet : inspectorWanted);
         root.classList.toggle('sheet-open', state.compact && state.sheet);
         root.classList.toggle('ai-open', Boolean(aiPanel) && state.aiOpen);

@@ -30,7 +30,7 @@ const FIELD = { type: 'string', enum: FIELD_KEYS, description: 'system = role pr
 
 export const TOOLS = {
     read_agent: fn('olens_read_agent', 'Read the full current text of every editable field of one agent.', { agent_id: AGENT }, ['agent_id']),
-    read_step: fn('olens_read_step', 'Read the full recorded process of one step of the run under review (thinking, output, tool calls).', { step: { type: 'integer', description: 'Step number from the run overview.' } }, ['step']),
+    read_step: fn('olens_read_step', 'Read the full recorded process of one numbered step (thinking, output, tool calls, errors).', { step: { type: 'integer', description: 'Step number from the run overview, or the evidence number (E3 → 3) in a stats diagnosis.' } }, ['step']),
     replace: fn('olens_replace_text', 'Replace one exact passage inside a text field. old_text must be copied verbatim from olens_read_agent output and occur exactly once.', {
         agent_id: AGENT, field: FIELD, old_text: { type: 'string' }, new_text: { type: 'string' },
     }, ['agent_id', 'field', 'old_text', 'new_text']),
@@ -167,7 +167,8 @@ const sectionText = (section) => {
     if (kind === 'tool_result') return `[结果${title}${section.meta?.ok === false ? ' 失败' : ''}] ${clip(section.meta?.err || body, 2000)}`;
     if (kind === 'reasoning') return body.trim() ? `[思考] ${clip(body, 2500)}` : '';
     if (kind === 'note' && section.meta?.output) return `[决定] ${clip(JSON.stringify(section.meta.output), 2500)}`;
-    return body.trim() ? `[输出${title}] ${clip(body, 6000)}` : section.meta?.err ? `[错误] ${section.meta.err}` : '';
+    const err = section.meta?.err ? `[错误] ${clip(section.meta.err, 1500)}` : '';
+    return [body.trim() ? `[输出${title}] ${clip(body, 6000)}` : '', err].filter(Boolean).join('\n');
 };
 
 /**
@@ -210,8 +211,19 @@ const DIAGNOSE = [
     '3. 能通过修改设定解决的，直接调用修改工具把改法放进草稿；属于模型能力、工具开关或流程结构的问题，说明原因并建议用户怎么调整。',
 ];
 
+const STATS = [
+    '',
+    '【这次的任务：统计诊断】用户给出了最近多次运行的统计，想知道为什么某些助手慢、为什么出错，以及怎么改。',
+    '1. 先看统计表和证据清单，找出最值得处理的一两个问题（占时最多、最慢、出错率高的助手），不要平均用力。需要细节时用 olens_read_step 读证据（编号如 E3）的完整过程，用 olens_read_agent 读助手设定。',
+    '2. 分清原因：',
+    '   - 出错：看错误原文。接口问题（API key、额度、限流 429、超时、5xx、上下文超长）要说明是连接/模型的问题，建议换连接配置或减少输入，不要去改提示词；工具调用格式错误、输出不符合要求的格式、拒答，多半是提示词或模型能力的问题。',
+    '   - 慢：对比同一位助手快的和慢的那几次。常见原因：调用工具太多轮、输出太长、提示词冗长重复、思考过长、用了慢模型、被审查打回重做。',
+    '3. 回复用户：先一句话结论，再分点说依据（引用统计数字和证据编号），最后说改法。',
+    '4. 能通过设定解决的直接调用修改工具放进草稿：例如精简提示词、给输出加长度上限、限制查工具的次数、把慢的助手换成更快的连接配置（只能用可用列表里的名字）。属于工具开关或流程结构的，说明原因并建议用户去原生面板调整。',
+];
+
 export function systemPrompt({ mode, profile, options = null, diagnose = false }) {
-    const lines = [...BASE, ...(diagnose ? DIAGNOSE : [])];
+    const lines = [...BASE, ...(diagnose === 'stats' ? STATS : diagnose ? DIAGNOSE : [])];
     if (options?.connections?.length) lines.push('', `可用的连接配置：${options.connections.join('、')}（留空 = 跟随默认）`);
     if (options?.presets?.length) lines.push(`可用的生成预设：${options.presets.slice(0, 60).join('、')}（留空 = 跟随默认）`);
     lines.push('', '【当前方案】', profileOverview(mode, profile));
@@ -233,6 +245,59 @@ export function diagnoseMessage({ view, steps, reply = '', focusStep = 0, compla
     if (focusStep && steps[focusStep - 1]) lines.push('', '要诊断的这一步的完整过程：', clip(steps[focusStep - 1].full, 12000));
     if (view.finalText) lines.push('', `编排的最终结果（${view.mode === 'director' ? '即回复正文' : '注入给主模型的指引'}）：`, clip(view.finalText, 5000));
     if (reply && view.mode !== 'director') lines.push('', '主模型据此写出的回复：', clip(reply, 4000));
+    return lines.join('\n');
+}
+
+/**
+ * Evidence for a stats diagnosis: for the agents worth looking at, their
+ * failed steps and their slowest / fastest step across the given runs.
+ * @param {object} stats   agentStats() result
+ * @param {object[]} views buildRunView() of the same runs
+ * @param {{ focus?: string, maxAgents?: number }} [opts]  focus = one agent id
+ * @returns {{ n, label, agentId, short, full }[]}  numbered E1, E2…
+ */
+export function statsEvidence(stats, views, { focus = '', maxAgents = 4 } = {}) {
+    const pick = focus
+        ? stats.agents.filter(a => a.agentId === focus)
+        : [...stats.agents].sort((a, b) => (b.failed - a.failed) || (b.share - a.share)).filter((a, i) => a.failed || i < 2).slice(0, maxAgents);
+    const out = [];
+    for (const agent of pick) {
+        const segs = [];
+        views.forEach((view, ri) => (view?.segments || []).forEach((seg) => { if (seg.agentId === agent.agentId) segs.push({ seg, view, ri }); }));
+        if (!segs.length) continue;
+        const failed = segs.filter(x => x.seg.status === 'failed').slice(0, 3);
+        const byTime = segs.filter(x => x.seg.status !== 'failed').sort((a, b) => b.seg.duration - a.seg.duration);
+        const chosen = [...failed.map(x => ({ ...x, why: '出错' })), byTime[0] && { ...byTime[0], why: '最慢的一次' }, byTime.length > 2 && { ...byTime[byTime.length - 1], why: '最快的一次（对照）' }].filter(Boolean);
+        for (const { seg, view, ri, why } of chosen) {
+            const [step] = runSteps({ segments: [seg] });
+            const n = out.length + 1;
+            const when = view.startedAtWall ? new Date(view.startedAtWall).toLocaleString('zh-CN', { month: 'numeric', day: 'numeric', hour: '2-digit', minute: '2-digit' }) : `第 ${ri + 1} 次运行`;
+            const head = `E${n}. ${agent.agentId}（${agentName(agent.agentId)}）· ${why} · ${when}`;
+            out.push({ n, agentId: agent.agentId, label: why, short: `${head}\n   ${step.short.replace(/^1\. /, '')}`, full: `${head}\n${step.full.replace(/^1\. /, '')}` });
+        }
+    }
+    return out;
+}
+
+/**
+ * First user message of a stats diagnosis.
+ * @param {{ stats: object, evidence: object[], mode: string, focus?: string, complaint?: string }} input
+ */
+export function statsMessage({ stats, evidence, mode, focus = '', complaint = '' }) {
+    const pct = (x) => `${Math.round(x * 100)}%`;
+    const lines = [focus
+        ? `请根据统计诊断「${agentName(focus)}」（${focus}）为什么慢或出错，并给出改法。`
+        : '请根据下面的统计，找出这套编排里最慢、最常出错的助手，诊断原因并给出改法。'];
+    lines.push(`用户的说明：${String(complaint || '').trim() || '（没有）'}`);
+    lines.push('', `统计范围：最近 ${stats.runs} 次「${modeInfo(mode).label}」运行，平均每次 ${formatDuration(stats.avgDuration)}，出错 ${stats.failedRuns} 次${stats.avgTokens ? `，平均每次 ${Math.round(stats.avgTokens)} tokens（只有整次的总数）` : ''}。`);
+    lines.push('', '每位助手（平均用时 / 中位 / 最长 / 出现次数 / 出错 / 占所有助手工作时间）：');
+    for (const a of stats.agents) {
+        lines.push(`- ${a.agentId}（${agentName(a.agentId)}）：${formatDuration(a.avg)} / ${formatDuration(a.median)} / ${formatDuration(a.max)} / ${a.runs} 次${a.steps > a.runs ? `（${a.steps} 段，含重做或多轮）` : ''} / ${a.failed ? `出错 ${a.failed}（${pct(a.failRate)}）` : '没出错'} / 占时 ${pct(a.share)}${a.lastError ? `\n  最近的错误：${clip(a.lastError, 300)}` : ''}`);
+    }
+    if (evidence.length) {
+        lines.push('', '证据（用 olens_read_step 加编号读完整过程，例如 step=3 读 E3）：');
+        lines.push(...evidence.map(e => e.short));
+    }
     return lines.join('\n');
 }
 
