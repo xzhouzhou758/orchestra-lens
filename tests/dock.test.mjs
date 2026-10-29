@@ -4,7 +4,7 @@ import { buildRunView } from '../src/model/run.js';
 import { buildFlow } from '../src/model/profile.js';
 import { createRecorder, createMemoryStorage } from '../src/model/recorder.js';
 import { describeToolCall, previewText, segmentPreview } from '../src/model/describe.js';
-import { buildBlocks, liveSummary, runCounts } from '../src/dock/dock-model.js';
+import { buildBlocks, liveSummary, runCounts, currentBlock, blockLabel } from '../src/dock/dock-model.js';
 import { createMockRunStore } from '../preview/mock-store.js';
 import { PROFILES, scriptFor, searchScript, playScript, createClock } from '../preview/mock-data.js';
 
@@ -100,4 +100,33 @@ test('previewText strips yaml keys and bullets', () => {
     assert.equal(previewText('summary: 林栖在试探\ntension: 雾正在起\n- 第三条'), '林栖在试探 · 雾正在起 · 第三条');
     assert.equal(previewText(''), '');
     assert.ok(previewText('x'.repeat(500), { tail: true }).startsWith('…'));
+});
+
+test('floating window shows only the current round, and the next one replaces it', () => {
+    const { clock } = setup();
+    const script = scriptFor('loop');
+    const shown = [];
+    for (let stop = 2; stop <= script.steps.length; stop += 1) {
+        const o = createMockRunStore({ now: clock.now });
+        const rec = createRecorder({ storage: createMemoryStorage(), now: clock.now });
+        rec.attach(o, 'orchestrator');
+        playScript(o, script, { speed: Infinity, clock, stopAt: stop });
+        const blocks = buildBlocks(buildRunView(rec.current()));
+        const cur = currentBlock(blocks);
+        if (cur && shown[shown.length - 1] !== cur.id) shown.push(cur.id);
+    }
+    assert.ok(shown.length > 1, 'moves on to later rounds');
+    assert.equal(new Set(shown).size, shown.length, 'never goes back to an earlier round');
+});
+
+test('currentBlock skips upcoming stages; blockLabel names steps and rounds', () => {
+    const { clock, orch, recorder } = setup();
+    playScript(orch, scriptFor('spec'), { speed: Infinity, clock, stopAt: 6 });
+    const flow = buildFlow(PROFILES.spec, { mode: 'spec' });
+    const blocks = buildBlocks(buildRunView(recorder.current(), Object.keys(flow.agents)), flow);
+    const cur = currentBlock(blocks);
+    assert.ok(cur && !cur.upcoming);
+    assert.match(blockLabel(cur).tag, /^第 \d+ 步$/);
+    assert.deepEqual(blockLabel({ title: '第 2 轮' }), { tag: '第 2 轮', title: '' });
+    assert.equal(currentBlock([]), null);
 });

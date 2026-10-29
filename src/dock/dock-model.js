@@ -121,3 +121,19 @@ export function liveSummary(view, flow = null) {
     if (view.mode === 'spec' || view.mode === 'single') return `${current.title} · ${current.index || blocks.indexOf(current) + 1}/${flow?.columns?.length || total}`;
     return str(current.title);
 }
+
+/**
+ * The block the small floating window shows: the running one (latest if
+ * several), else the last one that actually ran. Upcoming spec stages are skipped.
+ */
+export function currentBlock(blocks) {
+    const ran = (blocks || []).filter(b => !b.upcoming);
+    return [...ran].reverse().find(b => b.status === 'running') || ran[ran.length - 1] || null;
+}
+
+/** "第 2 轮" / "第 3 步 · 提炼" label for a block. */
+export function blockLabel(blk) {
+    if (!blk) return { tag: '', title: '' };
+    if (blk.index) return { tag: `第 ${blk.index} 步`, title: blk.title };
+    return { tag: blk.title, title: '' };
+}

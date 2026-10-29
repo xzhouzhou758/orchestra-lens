@@ -9,7 +9,8 @@
 
 //
 // `layout(vw, vh)` may return a sub-rectangle { left, top, width, height } of
-// the viewport (the side dock uses this); default is the whole viewport.
+// the viewport (the side dock uses this); default is the whole viewport;
+// `false` = leave it alone this time (the desktop floating dock).
 export function fitToViewport(root, { layout = null } = {}) {
     const win = root.ownerDocument?.defaultView || globalThis;
     const vv = win.visualViewport || null;
@@ -21,7 +22,8 @@ export function fitToViewport(root, { layout = null } = {}) {
         if (!root.isConnected) return;
         const vw = Math.round(vv?.width ?? win.innerWidth);
         const vh = Math.round(vv?.height ?? win.innerHeight);
-        const box = layout?.(vw, vh) || { left: 0, top: 0, width: vw, height: vh };
+        const box = layout?.(vw, vh) ?? { left: 0, top: 0, width: vw, height: vh };
+        if (box === false) return; // the caller places this one itself
         const left = Math.round(vv?.offsetLeft ?? 0) + box.left;
         const top = Math.round(vv?.offsetTop ?? 0) + box.top;
         // Reset to a known origin, then measure where that origin really is

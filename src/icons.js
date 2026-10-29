@@ -29,6 +29,8 @@ const PATHS = {
     plus: 'M12 5v14M5 12h14',
     minus: 'M5 12h14',
     fit: 'M4 9V4h5M20 9V4h-5M4 15v5h5M20 15v5h-5',
+    shrink: 'M9 4v5H4M15 4v5h5M9 20v-5H4M15 20v-5h5',
+    more: `${circle(5.5, 12, 1.2)}${circle(12, 12, 1.2)}${circle(18.5, 12, 1.2)}`,
     external: 'M14 4h6v6M20 4l-9 9M18 14v6H4V6h6',
     layers: 'M12 3l9 5-9 5-9-5zM3 13l9 5 9-5',
     sparkle: 'M12 3l1.9 5.1L19 10l-5.1 1.9L12 17l-1.9-5.1L5 10l5.1-1.9zM19 16l.8 2.2L22 19l-2.2.8L19 22l-.8-2.2L16 19l2.2-.8z',

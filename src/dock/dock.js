@@ -1,9 +1,10 @@
 // SPDX-License-Identifier: AGPL-3.0-or-later
 //
 // 运行面板 (side dock): replaces Luker's two run panels (search agent +
-// orchestrator) with one live feed beside the chat. Desktop: a right-hand
-// column; ≤ 860px: a bottom sheet. Collapses to a small pill while a run
-// keeps going. Everything is read from the recorder; nothing here writes
+// orchestrator) with one live feed beside the chat. Desktop: a small
+// draggable floating window showing only the current round (「放大」 = a
+// centred panel with every round); ≤ 860px: a bottom sheet. Collapses to a
+// small pill. Everything is read from the recorder; nothing here writes
 // to Luker.
 
 import { h, clear, put, copyText, debounce } from '../util.js';
@@ -11,7 +12,7 @@ import { icon } from '../icons.js';
 import { t, agentName, agentRole, statusLabel, modeInfo } from '../i18n.js';
 import { buildRunView, formatDuration, formatTokens } from '../model/run.js';
 import { segmentPreview } from '../model/describe.js';
-import { buildBlocks, runCounts, liveSummary } from './dock-model.js';
+import { buildBlocks, runCounts, liveSummary, currentBlock, blockLabel } from './dock-model.js';
 import { iconButton } from '../ui/components.js';
 import { fitToViewport } from '../viewport.js';
 import { agentAvatar, toneOf } from '../views/flow-view.js';
@@ -19,6 +20,12 @@ import { renderSections } from '../views/sections.js';
 
 const PREF_KEY = 'orchestraLens.dock.v1';
 const COMPACT_QUERY = '(max-width: 860px)';
+const DEFAULT_SIZE = { width: 300, height: 560 }; // floating window: width, max-height
+const WIDTH_RANGE = [240, 560];
+const MIN_HEIGHT = 160;
+const NARROW_WIDTH = 280; // below this the one-line header drops the tokens figure
+const DEFAULT_POS = { right: 20, bottom: 84 }; // px from the viewport's right / bottom edge
+const SHRINK_AFTER_MS = 4000;
 
 function loadPrefs() {
     try { return JSON.parse(globalThis.localStorage?.getItem(PREF_KEY) || '{}') || {}; } catch { return {}; }
@@ -55,20 +62,36 @@ export function createDock({ recorder, getFlow = () => null, openLens = null, on
     let expanded = new Set(); // segment keys with their detail open
     let pinnedBottom = true;
     let shownRunKey = '';
+    let shownBlockId = '';
     let destroyed = false;
+    let size = 'small'; // desktop only: small (floating, current round) | large (centred, every round)
+    let menuOpen = false;
+    let shrinkTimer = 0;
+    const isFloat = () => !compactMql?.matches;
 
     const root = h('div', { class: 'olens ol-dock', role: 'complementary', 'aria-label': '运行面板', tabIndex: -1, dataset: { state } });
     const head = h('header', { class: 'ol-dock-head' });
     const body = h('div', { class: 'ol-dock-body' });
     const foot = h('footer', { class: 'ol-dock-foot' });
     const grip = h('div', { class: 'ol-dock-grip', 'aria-hidden': 'true' });
-    put(root, grip, head, body, foot);
-    const pill = h('button', { type: 'button', class: 'olens ol-dock-pill', hidden: true, onClick: () => setState('open') });
-    const scrim = h('div', { class: 'olens ol-dock-scrim', onClick: () => collapse() });
+    const resizer = h('div', { class: 'ol-dock-resize', title: '拖动调整大小', 'aria-hidden': 'true' });
+    const menu = h('div', { class: 'ol-menu ol-dock-menu', role: 'menu', hidden: true });
+    const toastEl = h('div', { class: 'ol-dock-toast', hidden: true });
+    put(root, grip, resizer, head, body, foot, menu, toastEl);
+    const pillMain = h('button', { type: 'button', class: 'ol-dock-pill-main', onClick: () => setState('open') });
+    const pillClose = h('button', { type: 'button', class: 'ol-dock-pill-x', title: t('close'), 'aria-label': t('close'), onClick: () => setState('closed') }, icon('x', { size: 12 }));
+    const pill = h('div', { class: 'olens ol-dock-pill', hidden: true }, pillMain, pillClose);
+    const scrim = h('div', { class: 'olens ol-dock-scrim', onClick: () => (isFloat() ? setSize('small') : collapse()) });
 
     // Keys typed in the panel shouldn't drive Luker's swipe / edit hotkeys.
     root.addEventListener('keydown', (event) => {
-        if (event.key === 'Escape') { event.stopPropagation(); collapse(); return; }
+        if (event.key === 'Escape') {
+            event.stopPropagation();
+            if (menuOpen) setMenu(false);
+            else if (isFloat() && size === 'large') setSize('small');
+            else collapse();
+            return;
+        }
         event.stopPropagation();
     });
     body.addEventListener('scroll', () => {
@@ -82,25 +105,152 @@ export function createDock({ recorder, getFlow = () => null, openLens = null, on
         scrim.dataset.theme = theme;
     }
 
+    // ---- Desktop floating window: position (right/bottom offsets) + drag ----
+    const viewportSize = () => {
+        const vv = globalThis.visualViewport;
+        return { vw: Math.round(vv?.width ?? innerWidth), vh: Math.round(vv?.height ?? innerHeight) };
+    };
+    const clampNum = (n, lo, hi) => Math.round(Math.min(Math.max(lo, Number(n) || 0), Math.max(lo, hi)));
+    function clampPos(pos, width = floatSize.width) {
+        const { vw, vh } = viewportSize();
+        return { right: clampNum(pos?.right, 8, vw - width - 8), bottom: clampNum(pos?.bottom, 8, vh - 140) };
+    }
+    function clampSize(sz, pos = floatPos) {
+        const { vw, vh } = viewportSize();
+        return {
+            width: clampNum(sz?.width, WIDTH_RANGE[0], Math.min(WIDTH_RANGE[1], vw - pos.right - 8)),
+            height: clampNum(sz?.height, MIN_HEIGHT, vh - pos.bottom - 16),
+        };
+    }
+    // want* = what the user chose; float* = that, clamped to the current viewport.
+    let wantPos = { ...DEFAULT_POS, ...(prefs.pos || {}) };
+    let wantSize = { ...DEFAULT_SIZE, ...(prefs.size || {}) };
+    let floatSize = { width: clampNum(wantSize.width, ...WIDTH_RANGE), height: wantSize.height };
+    let floatPos = clampPos(wantPos);
+
+    function placeFloat() {
+        if (!isFloat() || !root.isConnected) return;
+        const { vw, vh } = viewportSize();
+        const st = root.style;
+        if (size === 'large') {
+            const width = Math.min(820, vw - 48);
+            const height = Math.min(Math.round(vh * 0.86), 920);
+            Object.assign(st, { left: `${Math.round((vw - width) / 2)}px`, top: `${Math.round((vh - height) / 2)}px`, right: 'auto', bottom: 'auto', width: `${width}px`, height: `${height}px`, maxHeight: '' });
+            return;
+        }
+        floatPos = clampPos(wantPos, clampNum(wantSize.width, ...WIDTH_RANGE));
+        floatSize = clampSize(wantSize, floatPos);
+        Object.assign(st, { left: 'auto', top: 'auto', right: `${floatPos.right}px`, bottom: `${floatPos.bottom}px`, width: `${floatSize.width}px`, height: '', maxHeight: `${floatSize.height}px` });
+        root.classList.toggle('is-narrow', floatSize.width < NARROW_WIDTH);
+    }
+
+    // Resize from the bottom-right corner: the top-left corner stays put, so
+    // the right/bottom offsets shrink as width/max-height grow.
+    let sizing = null;
+    resizer.addEventListener('pointerdown', (event) => {
+        if (!isFloat() || size !== 'small' || event.button !== 0) return;
+        const rect = root.getBoundingClientRect();
+        sizing = { id: event.pointerId, x: event.clientX, y: event.clientY, width: rect.width, height: rect.height, pos: { ...floatPos } };
+        resizer.setPointerCapture?.(event.pointerId);
+        root.classList.add('is-resizing');
+        event.preventDefault();
+        event.stopPropagation();
+    });
+    resizer.addEventListener('pointermove', (event) => {
+        if (!sizing || event.pointerId !== sizing.id) return;
+        const dx = Math.max(event.clientX - sizing.x, 8 - sizing.pos.right);
+        const dy = Math.max(event.clientY - sizing.y, 8 - sizing.pos.bottom);
+        const width = clampNum(sizing.width + dx, ...WIDTH_RANGE);
+        const height = Math.max(MIN_HEIGHT, Math.round(sizing.height + dy));
+        wantPos = { right: sizing.pos.right - (width - sizing.width), bottom: sizing.pos.bottom - (height - sizing.height) };
+        wantSize = clampSize({ width, height }, wantPos);
+        placeFloat();
+    });
+    const endSize = (event) => {
+        if (!sizing || event.pointerId !== sizing.id) return;
+        sizing = null;
+        root.classList.remove('is-resizing');
+        prefs.size = wantSize;
+        prefs.pos = wantPos;
+        savePrefs(prefs);
+    };
+    resizer.addEventListener('pointerup', endSize);
+    resizer.addEventListener('pointercancel', endSize);
+
+    let drag = null;
+    head.addEventListener('pointerdown', (event) => {
+        if (!isFloat() || size !== 'small' || event.button !== 0 || event.target.closest('button')) return;
+        drag = { id: event.pointerId, x: event.clientX, y: event.clientY, pos: { ...floatPos } };
+        head.setPointerCapture?.(event.pointerId);
+        root.classList.add('is-dragging');
+        event.preventDefault();
+    });
+    head.addEventListener('pointermove', (event) => {
+        if (!drag || event.pointerId !== drag.id) return;
+        wantPos = clampPos({ right: drag.pos.right - (event.clientX - drag.x), bottom: drag.pos.bottom - (event.clientY - drag.y) });
+        placeFloat();
+    });
+    const endDrag = (event) => {
+        if (!drag || event.pointerId !== drag.id) return;
+        drag = null;
+        root.classList.remove('is-dragging');
+        prefs.pos = wantPos;
+        savePrefs(prefs);
+    };
+    head.addEventListener('pointerup', endDrag);
+    head.addEventListener('pointercancel', endDrag);
+
+    function setSize(next) {
+        size = next;
+        root.dataset.size = size;
+        setMenu(false);
+        setState(state);
+    }
+
+    // ---- ⋯ menu (desktop): the old footer items ----
+    function setMenu(open) {
+        menuOpen = open;
+        menu.hidden = !open;
+        if (!open) { clear(menu); return; }
+        const item = (label, onClick, extra = {}) => h('button', { type: 'button', class: 'ol-menu-item', role: 'menuitem', onClick, ...extra },
+            h('span', { class: 'ol-menu-check' }, extra['aria-checked'] === 'true' ? icon('check', { size: 13 }) : null),
+            h('span', { class: 'ol-menu-title', text: label }));
+        const data = currentView();
+        put(clear(menu),
+            item('运行时自动打开', () => { prefs.autoOpen = !prefs.autoOpen; savePrefs(prefs); setMenu(true); }, { role: 'menuitemcheckbox', 'aria-checked': String(prefs.autoOpen) }),
+            openLens && data ? item('在编排透镜中查看', () => { setMenu(false); openLens(`${data.view.source}:${data.view.runId}`); }) : null,
+            onRestoreNative ? item('用原生面板', () => { setMenu(false); restoreNative(); }) : null);
+    }
+    const onOutside = (event) => {
+        if (menuOpen && !menu.contains(event.target) && !event.target.closest?.('.ol-dock-more')) setMenu(false);
+    };
+    document.addEventListener('pointerdown', onOutside, true);
+
+    function restoreNative() {
+        if (!globalThis.confirm?.('改回 Luker 自带的运行面板？刷新页面后生效，之后可在编排透镜的「历史」页改回来。')) return;
+        onRestoreNative();
+    }
+
+    // ---- After a run ends the small window lingers, then shrinks to the pill ----
+    function scheduleShrink(delay = SHRINK_AFTER_MS) {
+        clearTimeout(shrinkTimer);
+        shrinkTimer = setTimeout(() => {
+            if (destroyed || !isFloat() || state !== 'open' || size !== 'small' || recorder.isRunning()) return;
+            if (menuOpen || drag || sizing || root.matches(':hover')) { scheduleShrink(1500); return; }
+            setState('pill');
+        }, delay);
+    }
+
     // On phones Luker gives <html> a transform and zero height, so a fixed
     // box resolves against it (bottom:0 ends up at the top of the screen).
     // Measure and write px, like the lens does for its full-screen root.
-    const sheldWidth = (vw) => {
-        const raw = getComputedStyle(document.documentElement).getPropertyValue('--sheldWidth').trim();
-        const n = parseFloat(raw);
-        if (!n) return 0;
-        return /vw/.test(raw) ? vw * n / 100 : /%/.test(raw) ? vw * n / 100 : n;
-    };
     const viewportFit = fitToViewport(root, {
         layout(vw, vh) {
             if (compactMql?.matches) {
                 const height = Math.round(Math.min(vh * 0.72, 640));
                 return { left: 0, top: vh - height, width: vw, height };
             }
-            // Fill the space right of Luker's centred chat column when there is room.
-            const chat = sheldWidth(vw);
-            const width = Math.round(Math.min(420, Math.max(320, chat ? (vw - chat) / 2 : 380)));
-            return { left: vw - width, top: 0, width, height: vh };
+            return false; // desktop: placeFloat() owns the box
         },
     });
 
@@ -114,25 +264,37 @@ export function createDock({ recorder, getFlow = () => null, openLens = null, on
         const compact = Boolean(compactMql?.matches);
         pill.style.left = '0px'; pill.style.top = '0px'; pill.style.right = 'auto'; pill.style.bottom = 'auto';
         const r = pill.getBoundingClientRect();
-        const marginRight = compact ? 12 : 16;
-        const marginBottom = compact ? 76 : 84;
+        // Desktop: sit where the floating window's bottom-right corner is.
+        const marginRight = compact ? 12 : floatPos.right;
+        const marginBottom = compact ? 76 : floatPos.bottom;
         pill.style.left = `${vw - marginRight - r.width - r.left + Math.round(vv?.offsetLeft ?? 0)}px`;
         pill.style.top = `${vh - marginBottom - r.height - r.top + Math.round(vv?.offsetTop ?? 0)}px`;
     }
-    globalThis.addEventListener('resize', placePill);
+    const onResize = () => { placeFloat(); placePill(); };
+    globalThis.addEventListener('resize', onResize);
 
     function setState(next) {
+        if (next !== 'open') setMenu(false);
+        if (next !== 'open') clearTimeout(shrinkTimer);
         state = next;
         root.dataset.state = state;
-        root.classList.toggle('is-compact', Boolean(compactMql?.matches));
+        const compact = Boolean(compactMql?.matches);
+        root.classList.toggle('is-compact', compact);
+        root.classList.toggle('is-float', !compact);
+        root.dataset.size = compact ? 'small' : size;
+        if (compact) root.style.maxHeight = '';
         viewportFit.refresh();
         scrimFit.refresh();
-        scrim.hidden = !(state === 'open' && compactMql?.matches);
+        placeFloat();
+        scrim.classList.toggle('is-float', !compact);
+        scrim.hidden = !(state === 'open' && (compact || size === 'large'));
         render();
+        if (!pill.hidden) placePill();
     }
 
     function collapse() {
-        setState(recorder.isRunning() ? 'pill' : 'closed');
+        // Desktop keeps a capsule after the run too (click to look again); phones only while running.
+        setState(recorder.isRunning() || (isFloat() && currentView()) ? 'pill' : 'closed');
     }
 
     /** The run to show: the live one if any, else the latest seen this session. */
@@ -156,6 +318,7 @@ export function createDock({ recorder, getFlow = () => null, openLens = null, on
 
     function renderHead(view, counts) {
         const running = view.status === 'running';
+        if (isFloat()) { renderFloatHead(view, counts); return; }
         put(clear(head),
             h('div', { class: 'ol-dock-title' },
                 h('span', { class: 'ol-dock-mark', dataset: { source: view.source } }, icon(view.source === 'search' ? 'search' : 'conductor', { size: 15 })),
@@ -172,6 +335,78 @@ export function createDock({ recorder, getFlow = () => null, openLens = null, on
                 counts.agents ? h('span', { class: 'ol-dock-stat' }, icon('user', { size: 12 }), h('span', { text: counts.running > 1 ? `${counts.agents} 位 · ${counts.running} 位同时工作` : `${counts.agents} 位` })) : null,
                 counts.tools ? h('span', { class: 'ol-dock-stat' }, icon('tool', { size: 12 }), h('span', { text: `${counts.tools} 次调用` })) : null,
                 view.tokens ? h('span', { class: 'ol-dock-stat' }, icon('bolt', { size: 12 }), h('span', { text: `${formatTokens(view.tokens)} tokens` })) : null));
+    }
+
+    /** Desktop header. Small window: everything on one line; large: title row + stats row. */
+    function renderFloatHead(view, counts) {
+        const running = view.status === 'running';
+        const large = size === 'large';
+        if (!large) {
+            put(clear(head),
+                h('div', { class: 'ol-dock-title ol-dock-oneline' },
+                    h('span', { class: 'ol-dock-mark', dataset: { source: view.source } }, icon(view.source === 'search' ? 'search' : 'conductor', { size: 14 })),
+                    h('span', { class: 'ol-dock-name', text: view.source === 'search' ? '联网搜索' : `编排·${modeLabel(view)}` }),
+                    h('span', { class: 'ol-status', dataset: { status: running ? 'running' : view.status }, title: statusLabel(view.status) },
+                        h('span', { class: 'ol-status-dot', 'aria-label': statusLabel(view.status) })),
+                    h('span', { class: 'ol-dock-mini-stat', title: '用时', text: formatDuration(view.duration) }),
+                    view.tokens ? h('span', { class: 'ol-dock-mini-stat ol-dock-mini-tokens', title: `${formatTokens(view.tokens)} tokens`, text: formatTokens(view.tokens).replace(/\s+/g, '') }) : null,
+                    h('span', { class: 'ol-spacer' }),
+                    running ? iconButton('stop', t('runStop'), () => { recorder.stop(); }, { className: 'ol-iconbtn-sm ol-dock-stop' }) : null,
+                    iconButton('fit', '放大', () => setSize('large'), { className: 'ol-iconbtn-sm' }),
+                    iconButton('minus', '收起', () => collapse(), { className: 'ol-iconbtn-sm' }),
+                    iconButton('more', '更多', () => setMenu(!menuOpen), { className: 'ol-iconbtn-sm ol-dock-more', pressed: menuOpen })));
+            return;
+        }
+        put(clear(head),
+            h('div', { class: 'ol-dock-title' },
+                h('span', { class: 'ol-dock-mark', dataset: { source: view.source } }, icon(view.source === 'search' ? 'search' : 'conductor', { size: 15 })),
+                h('span', { class: 'ol-dock-name', text: view.source === 'search' ? '联网搜索' : `编排 · ${modeLabel(view)}` }),
+                h('span', { class: 'ol-status', dataset: { status: running ? 'running' : view.status } },
+                    h('span', { class: 'ol-status-dot', 'aria-hidden': 'true' }),
+                    h('span', { text: statusLabel(view.status) })),
+                h('span', { class: 'ol-spacer' }),
+                running ? iconButton('stop', t('runStop'), () => { recorder.stop(); }, { className: 'ol-iconbtn-sm ol-dock-stop' }) : null,
+                large ? iconButton('shrink', '缩小', () => setSize('small'), { className: 'ol-iconbtn-sm' })
+                    : iconButton('fit', '放大', () => setSize('large'), { className: 'ol-iconbtn-sm' }),
+                large ? null : iconButton('minus', '收起', () => collapse(), { className: 'ol-iconbtn-sm' }),
+                iconButton('more', '更多', () => setMenu(!menuOpen), { className: 'ol-iconbtn-sm ol-dock-more', pressed: menuOpen })),
+            h('div', { class: 'ol-dock-stats' },
+                h('span', { class: 'ol-dock-stat' }, icon('clock', { size: 12 }), h('span', { text: formatDuration(view.duration) })),
+                large && counts.agents ? h('span', { class: 'ol-dock-stat' }, icon('user', { size: 12 }), h('span', { text: counts.running > 1 ? `${counts.agents} 位 · ${counts.running} 位同时工作` : `${counts.agents} 位` })) : null,
+                large && counts.tools ? h('span', { class: 'ol-dock-stat' }, icon('tool', { size: 12 }), h('span', { text: `${counts.tools} 次调用` })) : null,
+                view.tokens ? h('span', { class: 'ol-dock-stat' }, icon('bolt', { size: 12 }), h('span', { text: `${formatTokens(view.tokens)} tokens` })) : null));
+    }
+
+    /** Small window: only the current round / stage, replaced when the next one starts. */
+    function roundEl(blk, view) {
+        const { tag, title } = blockLabel(blk);
+        if (blk.id !== shownBlockId) { shownBlockId = blk.id; pinnedBottom = true; } // follow the new round
+        return h('section', { class: 'ol-dock-round', dataset: { status: blk.status } },
+            h('div', { class: 'ol-dock-round-head' },
+                h('span', { class: 'ol-dock-block-dot', 'aria-hidden': 'true' }),
+                h('span', { class: 'ol-dock-round-tag', text: tag }),
+                title ? h('span', { class: 'ol-dock-block-title', text: title }) : null,
+                blk.parallel ? h('span', { class: 'ol-colflag is-parallel' }, icon('layers', { size: 11 }), h('span', { text: '同时' })) : null,
+                blk.review ? h('span', { class: 'ol-colflag', text: '审查' }) : null,
+                h('span', { class: 'ol-spacer' }),
+                blk.status !== 'pending' ? h('span', { class: 'ol-dock-block-time', text: formatDuration(blk.duration) }) : null),
+            h('ul', { class: 'ol-dock-agents' }, blk.segments.map(seg => agentRow(seg, view))));
+    }
+
+    /**
+     * Collapsed-row summary. Floating window: always exactly one line (the
+     * latest while running), so streaming never changes the row height.
+     * Large view: one line while running, up to four once the agent is done.
+     * Phones keep the old up-to-four lines.
+     */
+    function summaryLines(lines, seg) {
+        if (!isFloat()) return lines.slice(0, 4);
+        const running = seg.status === 'running';
+        if (size === 'small' || running) {
+            const line = running ? lines[lines.length - 1] : lines[0];
+            return line ? [line] : [];
+        }
+        return lines.slice(0, 4);
     }
 
     function agentRow(seg, view) {
@@ -198,7 +433,7 @@ export function createDock({ recorder, getFlow = () => null, openLens = null, on
                 : seg.status === 'running' ? h('span', { class: 'ol-dock-agent-live' }, h('span', { class: 'ol-pulse' }), h('span', { text: formatDuration(seg.duration) }))
                     : h('span', { class: 'ol-dock-agent-time', text: formatDuration(seg.duration) }),
             pending ? null : icon(seg.status === 'failed' ? 'alert' : open ? 'chevronUp' : 'chevronDown', { size: 13, className: 'ol-dock-agent-chev' })),
-            !open && !pending ? h('ul', { class: 'ol-dock-lines' }, preview.lines.slice(0, 4).map(line => h('li', { class: `ol-dock-line${line.muted ? ' is-muted' : ''}${line.quote ? ' is-quote' : ''}` },
+            !open && !pending ? h('ul', { class: 'ol-dock-lines' }, summaryLines(preview.lines, seg).map(line => h('li', { class: `ol-dock-line${line.muted ? ' is-muted' : ''}${line.quote ? ' is-quote' : ''}` },
                 icon(line.icon, { size: 12 }), h('span', { text: line.text })))) : null,
             open ? h('div', { class: 'ol-dock-detail' }, renderSections(seg.sections, { app: dockApp, mode: view.mode, agentId: seg.agentId })) : null);
         return row;
@@ -234,8 +469,9 @@ export function createDock({ recorder, getFlow = () => null, openLens = null, on
     let toastTimer = 0;
     function toast(text) {
         clearTimeout(toastTimer);
-        foot.dataset.toast = text;
-        toastTimer = setTimeout(() => { delete foot.dataset.toast; }, 1600);
+        toastEl.textContent = text;
+        toastEl.hidden = false;
+        toastTimer = setTimeout(() => { toastEl.hidden = true; }, 1600);
     }
 
     const dockApp = {
@@ -248,8 +484,9 @@ export function createDock({ recorder, getFlow = () => null, openLens = null, on
         applyTheme();
         const data = currentView();
         const pillWasHidden = pill.hidden;
-        pill.hidden = !(state === 'pill' && data?.view.status === 'running');
-        if (state === 'pill' && data?.view.status !== 'running') {
+        const liveRun = data?.view.status === 'running';
+        pill.hidden = !(state === 'pill' && data && (liveRun || isFloat()));
+        if (state === 'pill' && !(data && (liveRun || isFloat()))) {
             state = 'closed';
             root.dataset.state = state;
         }
@@ -257,19 +494,26 @@ export function createDock({ recorder, getFlow = () => null, openLens = null, on
             put(clear(head), h('div', { class: 'ol-dock-title' }, h('span', { class: 'ol-dock-name', text: '运行面板' }), h('span', { class: 'ol-spacer' }), iconButton('x', t('close'), () => setState('closed'), { className: 'ol-iconbtn-sm' })));
             put(clear(body), h('p', { class: 'ol-dock-empty', text: '发送消息后，这里会实时显示编排和搜索的过程。' }));
             clear(foot);
+            shownBlockId = '';
             return;
         }
         const { view, flow, others } = data;
         const key = `${view.source}:${view.runId}`;
         if (key !== shownRunKey) {
             shownRunKey = key;
+            shownBlockId = '';
             expanded = new Set();
             pinnedBottom = true;
         }
         if (state === 'pill') {
             const summary = liveSummary(view, flow);
-            put(clear(pill), h('span', { class: 'ol-pulse' }),
-                h('span', { class: 'ol-dock-pill-text', text: `${view.source === 'search' ? '搜索中' : `编排中${summary ? ` · ${summary}` : ''}`} · ${formatDuration(view.duration)}` }));
+            const source = view.source === 'search' ? '搜索' : '编排';
+            pill.dataset.status = liveRun ? 'running' : view.status;
+            pillClose.hidden = liveRun;
+            put(clear(pillMain), liveRun ? h('span', { class: 'ol-pulse' }) : h('span', { class: 'ol-dock-pill-dot', 'aria-hidden': 'true' }),
+                h('span', { class: 'ol-dock-pill-text', text: liveRun
+                    ? `${view.source === 'search' ? '搜索中' : `编排中${summary ? ` · ${summary}` : ''}`} · ${formatDuration(view.duration)}`
+                    : `${source}${statusLabel(view.status)} · ${formatDuration(view.duration)}` }));
             // Re-pin when it appears or its text (width) changes.
             if (pillWasHidden || pill.dataset.len !== String(pill.textContent.length)) {
                 pill.dataset.len = String(pill.textContent.length);
@@ -281,14 +525,28 @@ export function createDock({ recorder, getFlow = () => null, openLens = null, on
         renderHead(view, runCounts(view));
         const blocks = buildBlocks(view, flow);
         const prevScroll = body.scrollTop;
+        const diag = onDiagnose && view.status !== 'running' && view.source === 'orchestrator' ? h('div', { class: 'ol-dock-diag' },
+            h('button', { type: 'button', class: 'ol-btn ol-btn-sm', onClick: () => onDiagnose(key) }, icon('target', { size: 13 }), h('span', { text: view.status === 'committed' ? '结果不满意？AI 诊断' : 'AI 诊断哪里出了错' }))) : null;
+        if (isFloat() && size === 'small') {
+            const cur = currentBlock(blocks);
+            put(clear(body),
+                others.length ? h('div', { class: 'ol-dock-also' }, icon('play', { size: 12 }), h('span', { text: `${others.map(r => (r.source === 'search' ? '联网搜索' : '编排')).join('、')} 也在运行` })) : null,
+                view.error && view.status !== 'committed' ? h('div', { class: 'ol-run-error' }, icon('alert', { size: 13 }), h('span', { text: humanError(view.error) })) : null,
+                cur ? roundEl(cur, view) : h('p', { class: 'ol-dock-empty', text: '正在准备…' }),
+                view.status !== 'running' ? finalEl(view) : null,
+                diag);
+            body.scrollTop = pinnedBottom ? body.scrollHeight : prevScroll;
+            clear(foot);
+            return;
+        }
         put(clear(body),
             others.length ? h('div', { class: 'ol-dock-also' }, icon('play', { size: 12 }), h('span', { text: `${others.map(r => (r.source === 'search' ? '联网搜索' : '编排')).join('、')} 也在运行` })) : null,
             view.error && view.status !== 'committed' ? h('div', { class: 'ol-run-error' }, icon('alert', { size: 13 }), h('span', { text: humanError(view.error) })) : null,
             blocks.length ? h('div', { class: 'ol-dock-blocks' }, blocks.map(blk => blockEl(blk, view))) : h('p', { class: 'ol-dock-empty', text: '正在准备…' }),
             finalEl(view),
-            onDiagnose && view.status !== 'running' && view.source === 'orchestrator' ? h('div', { class: 'ol-dock-diag' },
-                h('button', { type: 'button', class: 'ol-btn ol-btn-sm', onClick: () => onDiagnose(key) }, icon('target', { size: 13 }), h('span', { text: view.status === 'committed' ? '结果不满意？AI 诊断' : 'AI 诊断哪里出了错' }))) : null);
+            diag);
         body.scrollTop = pinnedBottom ? body.scrollHeight : prevScroll;
+        if (isFloat()) { clear(foot); return; } // desktop: footer items live in the ⋯ menu
 
         put(clear(foot),
             h('button', {
@@ -302,10 +560,7 @@ export function createDock({ recorder, getFlow = () => null, openLens = null, on
                 type: 'button',
                 class: 'ol-linkbtn ol-dock-native',
                 title: '不用这个面板，改回 Luker 自带的运行面板（刷新后生效）',
-                onClick: () => {
-                    if (!globalThis.confirm?.('改回 Luker 自带的运行面板？刷新页面后生效，之后可在编排透镜的「历史」页改回来。')) return;
-                    onRestoreNative();
-                },
+                onClick: () => restoreNative(),
                 text: '用原生面板',
             }) : null);
     }
@@ -322,12 +577,14 @@ export function createDock({ recorder, getFlow = () => null, openLens = null, on
         if (kind === 'start') {
             const run = recorder.current();
             if (run?.quiet) return;
+            clearTimeout(shrinkTimer);
             if (prefs.autoOpen && state !== 'open') setState(compactMql?.matches && state === 'pill' ? 'pill' : 'open');
             else if (!prefs.autoOpen && state === 'closed') setState('pill');
             else render();
             return;
         }
         if (kind === 'clear') { render(); return; }
+        if (kind === 'finish' && isFloat() && state === 'open' && size === 'small' && !recorder.isRunning()) scheduleShrink();
         renderSoon();
     });
     const ticker = setInterval(() => { if (state !== 'closed' && recorder.isRunning()) render(); }, 1000);
@@ -341,6 +598,9 @@ export function createDock({ recorder, getFlow = () => null, openLens = null, on
     scrimFit.refresh();
     scrim.hidden = true;
     root.classList.toggle('is-compact', Boolean(compactMql?.matches));
+    root.classList.toggle('is-float', isFloat());
+    root.dataset.size = size;
+    placeFloat();
     applyTheme();
 
     return {
@@ -353,10 +613,12 @@ export function createDock({ recorder, getFlow = () => null, openLens = null, on
             destroyed = true;
             unsubscribe();
             clearInterval(ticker);
+            clearTimeout(shrinkTimer);
+            document.removeEventListener('pointerdown', onOutside, true);
             compactMql?.removeEventListener?.('change', onCompact);
             viewportFit.destroy();
             scrimFit.destroy();
-            globalThis.removeEventListener('resize', placePill);
+            globalThis.removeEventListener('resize', onResize);
             root.remove();
             pill.remove();
             scrim.remove();

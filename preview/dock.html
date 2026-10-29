@@ -24,6 +24,8 @@
     <script type="module">
         // Preview params: mode=spec|agenda|loop|director  at=0.5 (freeze orchestration at that point)
         //   theme=dark|light  stage=search|orch|done  expand=<n> (expand n-th agent row)
+        //   play=1 (auto-send on load: search rounds then orchestration rounds, each replacing the last)
+        //   speed=2  size=large (open 「放大」)  menu=1 (open the ⋯ menu)  reset=1 (forget the dragged position and size)
         import { createRecorder, createMemoryStorage } from '../src/model/recorder.js';
         import { createDock } from '../src/dock/dock.js';
         import { buildFlow } from '../src/model/profile.js';
@@ -34,7 +36,9 @@
         const mode = params.get('mode') || 'spec';
         const stage = params.get('stage') || 'live';
         if (params.get('theme')) localStorage.setItem('orchestraLens.prefs.v1', JSON.stringify({ theme: params.get('theme') }));
-        localStorage.removeItem('orchestraLens.dock.v1');
+        // Fresh prefs each load, but keep the dragged position / size unless reset=1.
+        const kept = (() => { try { const { pos, size } = JSON.parse(localStorage.getItem('orchestraLens.dock.v1') || '{}'); return { pos, size }; } catch { return {}; } })();
+        localStorage.setItem('orchestraLens.dock.v1', JSON.stringify(params.has('reset') ? {} : kept));
 
         const instant = stage !== 'live';
         const clock = createClock(performance.now());
@@ -45,7 +49,7 @@
         recorder.attach(orchStore, 'orchestrator');
         recorder.attach(searchStore, 'search');
         const flow = buildFlow(PROFILES[mode], { mode, settings: { reviewRerunMaxRounds: 2 } });
-        const dock = createDock({ recorder, getFlow: () => flow, openLens: () => alert('（打开编排透镜）') });
+        const dock = createDock({ recorder, getFlow: () => flow, openLens: () => alert('（打开编排透镜）'), onRestoreNative: () => alert('（改回原生面板）') });
         window.__dock = dock;
 
         async function send({ speed = 1, until = '' } = {}) {
@@ -69,6 +73,10 @@
         if (stage === 'search') send({ until: 'search' });
         else if (stage === 'orch') send({ until: 'orch' });
         else if (stage === 'done') send({ until: 'done' });
+        else if (params.get('play')) send({ speed: Number(params.get('speed') || 1) });
+
+        if (params.get('size') === 'large') setTimeout(() => document.querySelector('.ol-dock [aria-label="放大"]')?.click(), 150);
+        if (params.get('menu')) setTimeout(() => document.querySelector('.ol-dock-more')?.click(), 250);
 
         const expand = params.get('expand');
         if (expand != null) setTimeout(() => document.querySelectorAll('.ol-dock-agent-head:not(:disabled)')[Number(expand)]?.click(), 200);

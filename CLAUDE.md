@@ -1,6 +1,6 @@
 # CLAUDE.md — Orchestra Lens（编排透镜）
 
-Luker 第三方扩展：给内置 `orchestrator`（多智能体编排）做的可视化工作台。姊妹项目 memory-lens（`../memory-lens`），设计语言、工具函数、约定都沿用它。当前版本 0.3.0。仓库 https://github.com/xzhouzhou758/orchestra-lens ，用户在 Luker「扩展 → 安装扩展」粘贴该地址安装；改 manifest.json 和 package.json 的 version 后 Luker 会提示更新。
+Luker 第三方扩展：给内置 `orchestrator`（多智能体编排）做的可视化工作台。姊妹项目 memory-lens（`../memory-lens`），设计语言、工具函数、约定都沿用它。当前版本 0.4.0。仓库 https://github.com/xzhouzhou758/orchestra-lens ，用户在 Luker「扩展 → 安装扩展」粘贴该地址安装；改 manifest.json 和 package.json 的 version 后 Luker 会提示更新。
 
 ## 用户的硬性要求（沿用 memory-lens）
 
@@ -66,7 +66,7 @@ preview/              mock-store.js（同名方法的假 store）、mock-data.js
 - 搜索的 store 是私有的（`search-tools/main.js` 里的 `searchRunPanel`，没导出）。`takeover.js` 包了一层 `PanelRenderer.prototype.handle`：每个原生面板收到事件时会把 `this.store` 交给我们（`this.root.id` 区分来源）。**不改 Luker 代码**，原来的 handle 照常执行。
 - 接管时给 `<html>` 加 `ol-takeover`，CSS 隐藏 `.luker-run-panel` 和它的胶囊。原生面板被 Luker 的「显示运行面板」按钮打开时，MutationObserver 看到 `data-state=open` → 打开我们的面板（运行开始 800ms 内的自动打开忽略）。
 - 开关：localStorage `orchestraLens.takeover`（'off' = 用原生面板），面板底部「用原生面板」和透镜历史页都能改，刷新后生效。自动打开偏好在 `orchestraLens.dock.v1`。
-- **定位的坑**：手机上 Luker 给 `<html>` 加了 transform 且高度为 0，`position:fixed; bottom:0` 会跑到屏幕顶上。面板、遮罩、胶囊都用 `viewport.js` 按 visualViewport 量出来写 px（`fitToViewport(root, { layout })`）。电脑上宽度 = 聊天栏右侧空白（`--sheldWidth`），夹在 320–420px。
+- **定位的坑**：手机上 Luker 给 `<html>` 加了 transform 且高度为 0，`position:fixed; bottom:0` 会跑到屏幕顶上。面板、遮罩、胶囊都用 `viewport.js` 按 visualViewport 量出来写 px（`fitToViewport(root, { layout })`）。电脑上（0.4.0 起）是右下角悬浮小窗：默认 300px 宽，标题栏可拖动，右下角可拖拽调大小（宽 240–560px），位置和大小存 `orchestraLens.dock.v1` 的 pos / size；只显示当前一轮（新一轮整块替换），收起的行固定一行避免流式时跳动；「放大」= 居中大面板显示所有轮次；结束约 4 秒后缩成胶囊；底部那条收进 ⋯ 菜单。手机仍是底部抽屉。
 - 搜索 round id 是 `round-<n>`，在 run.js 里映射成一位「搜索助手」（`search_agent`）。
 
 ## 修改与 AI（0.3.0）
@@ -77,7 +77,7 @@ preview/              mock-store.js（同名方法的假 store）、mock-data.js
 - AI：`requestToolCallsWithRetry(ctx, {toolCallRetryMax, rpmLimit}, {taskMessages, apiPresetName, llmPresetName, tools, includeAssistantText:true, allowNoToolCalls:true})`。模型默认 = 编排器 `requestApiPresetName/requestLlmPresetName`（迭代 AI），透镜自己的选择存 `extensionSettings.orchestra_lens.ai`。用户的生成预设（含破限）照常包在外面，不要动。对话存 localStorage `orchestraLens.ai.v1`，按 target 分组，每组最多 12 条。
 - AI 在自己的副本上改；一轮结束 `diffProfiles(草稿, AI 副本)` 得到改动清单，勾选后进草稿；没勾的 / 撤销的会回写到 tool_result 让 AI 知道。
 - 统计诊断（统计页「AI 诊断」/ 每行的靶心）：`statsEvidence(stats, views, {focus})` 挑出要看的助手（出错的优先，再按占时）各自的出错段、最慢段、最快段（对照），编号 E1…，和统计表一起用 `statsMessage` 发出；session.kind='stats'，统计和证据冻结在 `session.statsCtx`（存档时证据截到 8000 字），olens_read_step 读的是证据编号。提示词 `STATS`：先分清接口错误（429/超时/key/上下文超长 → 换连接，不改提示词）和提示词/模型问题；慢就对比快慢两次。
-- 诊断：`runSteps(view)` 把运行编号成步骤（短摘要进首条消息，全文用 olens_read_step 取）；首条消息还带最终结果和主模型回复（`replyFor`：run.floor 之后第一条非用户消息）。入口：运行页「AI 诊断」、时间线段「诊断这一步」、详情栏「AI 诊断这一步」、运行面板底部。
+- 诊断：`runSteps(view)` 把运行编号成步骤（短摘要进首条消息，全文用 olens_read_step 取）；首条消息还带最终结果和主模型回复（`replyFor`：run.floor 之后第一条非用户消息）。入口：运行页「AI 诊断」、时间线段「诊断这一步」、详情栏「AI 诊断这一步」、运行面板。
 - 已在真实 Luker 2.8.0 验证（临时数据目录 + 本地假 OpenAI 兼容接口）：通用方案保存 / 撤销 / 落盘、原生编辑器草稿同步、角色卡方案写入（png 里有）、冲突提示、AI 三轮工具调用、诊断入口。未用真实模型测过提示词效果。
 
 ## 已验证 / 未验证
