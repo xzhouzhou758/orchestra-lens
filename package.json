@@ -1,6 +1,6 @@
 {
     "name": "orchestra-lens",
-    "version": "0.4.2",
+    "version": "0.4.3",
     "private": true,
     "description": "Visual workspace for Luker's multi-agent orchestrator.",
     "license": "AGPL-3.0-or-later",
